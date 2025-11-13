@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Remote PC Control - Process Manager</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        button { padding: 8px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .log-box { background-color: #333; color: #0f0; padding: 10px; border-radius: 4px; max-height: 150px; overflow-y: scroll; font-family: 'Courier New', monospace; margin-top: 10px; font-size: 0.8em; }
+        #process-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        #process-table th, #process-table td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 0.9em; }
+        #process-table th { background-color: #f2f2f2; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ Remote Control - Process Manager</h1>
+        
+        <div class="controls">
+            <button id="btn-connect" onclick="connectWS()">Connect/Reconnect (9001)</button>
+            <button onclick="sendCommand('PROCESS', 'LIST')">1. List Processes</button>
+            
+            <input type="text" id="proc-path" placeholder="Path/Name (e.g., notepad.exe)" value="notepad.exe" style="flex-grow: 1; padding: 8px;">
+            <button onclick="startProcess()">2. Start Process</button>
+
+            <input type="number" id="kill-pid" placeholder="PID to Kill" style="width: 100px; padding: 8px;">
+            <button onclick="killProcess()" style="background-color: #dc3545;">3. Kill PID</button>
+        </div>
+
+        <h3>Console Log</h3>
+        <div class="log-box" id="output"></div>
+
+        <h3>Process List (Click on PID to Kill)</h3>
+        <table id="process-table">
+            <thead>
+                <tr><th>PID</th><th>Name</th><th>Threads</th><th>Action</th></tr>
+            </thead>
+            <tbody id="process-table-body">
+                </tbody>
+        </table>
+    </div>
+
+    <script>
+        let ws = null;
+        // const WS_URL = 'ws://127.0.0.1:9001'; 
+       // const WS_URL = 'ws://127.0.0.1:9010';
+  
+        // const WS_URL = "ws://192.168.137.1:9010";
+
+        const WS_URL = "ws://10.29.160.254:9010";
+
+        const output = document.getElementById('output');
+        
+        // UTILITY FUNCTIONS
+        function logStatus(message, color = 'white') {
+            output.innerHTML += `<div style="color: ${color};">${message}</div>`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // 1. WEBSOCKET CONNECTION
+        function connectWS(){
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                logStatus('Already connected or connecting.', 'yellow');
+                return;
+            }
+            logStatus(`Connecting to ${WS_URL}...`, 'yellow');
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => logStatus('Connected to server.', 'lime');
+            ws.onclose = () => logStatus('Disconnected.', 'red');
+            ws.onerror = (e) => logStatus('WebSocket Error: Failed to connect.', 'red');
+            
+            ws.onmessage = (event) => {
+                try {
+                    const response = JSON.parse(event.data);
+                    handleServerResponse(response);
+                } catch (e) {
+                    logStatus('Invalid JSON received.', 'red');
+                }
+            };
+        }
+
+        // 2. SEND COMMAND (The new OOP structure)
+        function sendCommand(module, command, params = {}) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                logStatus('WebSocket not connected. Please connect first.', 'red');
+                return;
+            }
+            const payload = JSON.stringify({ module: module, command: command, ...params });
+            logStatus(`SENT: ${payload}`, 'cyan');
+            ws.send(payload);
+        }
+
+        // 3. SPECIFIC COMMAND HANDLERS
+        function startProcess() {
+            const path = document.getElementById('proc-path').value;
+            if (path) {
+                sendCommand('PROCESS', 'START', { path: path });
+            } else {
+                logStatus('Process path cannot be empty.', 'red');
+            }
+        }
+
+        function killProcess(pid = null) {
+            const finalPid = pid || document.getElementById('kill-pid').value;
+            if (finalPid) {
+                sendCommand('PROCESS', 'KILL', { pid: parseInt(finalPid) });
+            } else {
+                logStatus('PID to kill cannot be empty.', 'red');
+            }
+        }
+
+        // 4. RESPONSE HANDLER
+        function handleServerResponse(response) {
+            if (response.status === 'success') {
+                logStatus(`[SUCCESS] ${response.module} ${response.command}: ${response.message || 'OK'}`, 'lime');
+                
+                if (response.module === 'PROCESS' && response.command === 'LIST' && response.data) {
+                    displayProcesses(response.data.process_list || response.data);
+                }
+
+            } else if (response.status === 'error') {
+                logStatus(`[ERROR] ${response.module || 'CORE'}: ${response.message}`, 'red');
+            } else {
+                 logStatus(`[UNKNOWN] ${JSON.stringify(response)}`, 'yellow');
+            }
+        }
+
+        // 5. UI DISPLAY
+        function displayProcesses(processes) {
+            const tbody = document.getElementById('process-table-body');
+            tbody.innerHTML = '';
+            
+            // Sắp xếp theo tên
+            processes.sort((a, b) => a.name.localeCompare(b.name));
+
+            processes.forEach(p => {
+                const row = tbody.insertRow();
+                row.insertCell().textContent = p.pid;
+                row.insertCell().textContent = p.name;
+                row.insertCell().textContent = p.threads || 'N/A';
+                
+                const actionCell = row.insertCell();
+                const killBtn = document.createElement('button');
+                killBtn.textContent = 'Kill';
+                killBtn.style.backgroundColor = '#dc3545';
+                killBtn.onclick = () => killProcess(p.pid);
+                actionCell.appendChild(killBtn);
+            });
+            logStatus(`Displayed ${processes.length} processes.`, 'yellow');
+        }
+
+        // Khởi tạo kết nối
+        connectWS(); 
+    </script>
+</body>
+</html>
