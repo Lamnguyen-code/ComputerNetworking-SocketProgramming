@@ -1,21 +1,19 @@
-// src/modules/ProcessManager.hpp
 #pragma once
 #include "../interfaces/IRemoteModule.hpp"
 #include <string>
-#include <windows.h> // Cho các kiểu dữ liệu Windows
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 class ProcessManager : public IRemoteModule {
-private:
-    std::string module_name_ = "PROCESS";
-    
-    // Các hàm thực thi Windows API (Triển khai trong .cpp)
-    json list_processes();
-    json kill_process(unsigned long pid);
-    json start_process(const std::string& path);
-    
 public:
-    ProcessManager() = default;
-    const std::string& get_module_name() const override { return module_name_; }
+    const std::string& get_module_name() const override;
+    json handle_command(const json& request) override;
 
-    json handle_command(const json& request) override; // Định nghĩa trong .cpp
+private:
+    json list_processes();
+    bool kill_process(int pid);
+    
+    // [MỚI] Hàm khởi tạo tiến trình trả về PID
+    bool start_process(const std::string& path, int& out_pid);
 };

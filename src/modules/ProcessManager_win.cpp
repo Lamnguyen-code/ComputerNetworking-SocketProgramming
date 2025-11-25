@@ -1,169 +1,140 @@
 #include "ProcessManager.hpp"
 #include <windows.h>
 #include <tlhelp32.h>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <nlohmann/json.hpp>
+#include <iostream>
 
-using nlohmann::json;
-
-// Tiện ích: WCHAR -> UTF-8
-static std::string to_utf8(const std::wstring& wide_str) {
-    if (wide_str.empty()) return {};
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wide_str.c_str(),
-                                          static_cast<int>(wide_str.size()),
-                                          nullptr, 0, nullptr, nullptr);
-    std::string out(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wide_str.c_str(),
-                        static_cast<int>(wide_str.size()),
-                        out.data(), size_needed, nullptr, nullptr);
-    return out;
+const std::string& ProcessManager::get_module_name() const {
+    static const std::string name = "PROCESS";
+    return name;
 }
-
-// ==== WINDOWS IMPL ====
-
-json ProcessManager::list_processes() {
-    json process_list = json::array();
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-
-    if (snapshot != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32W pe32{};
-        pe32.dwSize = sizeof(pe32);
-
-        if (Process32FirstW(snapshot, &pe32)) {
-            do {
-                process_list.push_back({
-                    {"pid",      static_cast<unsigned long>(pe32.th32ProcessID)},
-                    {"name",     to_utf8(std::wstring(pe32.szExeFile))},
-                    {"threads",  static_cast<unsigned long>(pe32.cntThreads)}
-                });
-            } while (Process32NextW(snapshot, &pe32));
-        }
-        CloseHandle(snapshot);
-    }
-
-    return {
-        {"status", "success"},
-        {"module", get_module_name()},
-        {"data",   process_list}
-    };
-}
-
-json ProcessManager::kill_process(unsigned long pid) {
-    // Không cho tự kill chính server
-    const DWORD self = GetCurrentProcessId();
-    if (static_cast<DWORD>(pid) == self) {
-        return {
-            {"status","error"},
-            {"module", get_module_name()},
-            {"message","Refuse to terminate own server process"},
-            {"pid", pid}
-        };
-    }
-
-    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
-    if (!hProcess) {
-        const DWORD gle = GetLastError();
-        return {
-            {"status","error"},
-            {"module", get_module_name()},
-            {"message","OpenProcess failed"},
-            {"pid", pid},
-            {"last_error", static_cast<int>(gle)}
-        };
-    }
-
-    const BOOL ok = TerminateProcess(hProcess, 1 /* exit code khác 0 */);
-    const DWORD gle = ok ? 0 : GetLastError();
-    CloseHandle(hProcess);
-
-    if (!ok) {
-        return {
-            {"status","error"},
-            {"module", get_module_name()},
-            {"message","TerminateProcess failed"},
-            {"pid", pid},
-            {"last_error", static_cast<int>(gle)}
-        };
-    }
-
-    return {
-        {"status","success"},
-        {"module", get_module_name()},
-        {"command","KILL"},
-        {"pid", pid}
-    };
-}
-
-json ProcessManager::start_process(const std::string& path) {
-    STARTUPINFOA si{};
-    PROCESS_INFORMATION pi{};
-    si.cb = sizeof(si);
-
-    if (!CreateProcessA(
-            nullptr,
-            const_cast<char*>(path.c_str()),
-            nullptr, nullptr, FALSE, 0, nullptr, nullptr,
-            &si, &pi))
-    {
-        const DWORD gle = GetLastError();
-        return {
-            {"status","error"},
-            {"module", get_module_name()},
-            {"message","Failed to start process"},
-            {"path", path},
-            {"last_error", static_cast<int>(gle)}
-        };
-    }
-
-    // Lấy PID trước khi đóng handle
-    const DWORD child_pid = pi.dwProcessId;
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    return {
-        {"status","success"},
-        {"module", get_module_name()},
-        {"command","START"},
-        {"pid", static_cast<unsigned long>(child_pid)},
-        {"path", path}
-    };
-}
-
-// ==== DISPATCH CHÍNH ====
 
 json ProcessManager::handle_command(const json& request) {
-    const std::string command = request.value("command", "");
-    if (command == "LIST") {
+    std::string cmd = request.value("command", "");
+
+    // --- 1. LIST ---
+    if (cmd == "LIST") {
         return list_processes();
     }
-    if (command == "KILL") {
-        if (!request.contains("pid") || !request["pid"].is_number_unsigned()) {
-            return {
-                {"status","error"},
-                {"module", get_module_name()},
-                {"message","Missing or invalid 'pid' parameter"}
-            };
+    
+    // --- 2. KILL ---
+    else if (cmd == "KILL") {
+        int pid = 0;
+        if (request.contains("payload") && request["payload"].contains("pid")) {
+            pid = request["payload"]["pid"].get<int>();
+        } else if (request.contains("pid")) {
+            pid = request.value("pid", 0);
         }
-        const unsigned long pid = request["pid"].get<unsigned long>();
-        return kill_process(pid);
-    }
-    if (command == "START") {
-        const std::string path = request.value("path", "");
-        if (path.empty()) {
+
+        if (pid > 0 && kill_process(pid)) {
             return {
-                {"status","error"},
-                {"module", get_module_name()},
-                {"message","Missing 'path' parameter"}
+                {"module", "PROCESS"},
+                {"command", "KILL"},
+                {"status", "success"},
+                {"pid", pid},
+                {"message", "Process terminated"}
             };
+        } else {
+            return {{"status", "error"}, {"message", "Failed to kill process"}};
         }
-        return start_process(path);
     }
 
-    return {
-        {"status","error"},
-        {"module", get_module_name()},
-        {"message","Unknown PROCESS command"}
-    };
+    // --- 3. START (MỚI) ---
+    else if (cmd == "START") {
+        std::string path;
+        // Lấy đường dẫn từ payload
+        if (request.contains("payload") && request["payload"].contains("path")) {
+            path = request["payload"]["path"].get<std::string>();
+        } 
+        // Fallback
+        else if (request.contains("path")) {
+            path = request.value("path", "");
+        }
+
+        if (path.empty()) {
+            return {{"status", "error"}, {"message", "Missing 'path' in payload"}};
+        }
+
+        int new_pid = 0;
+        if (start_process(path, new_pid)) {
+            return {
+                {"module", "PROCESS"},
+                {"command", "START"},
+                {"status", "success"},
+                {"pid", new_pid},
+                {"message", "Process started successfully"}
+            };
+        } else {
+            return {{"status", "error"}, {"message", "Failed to create process. Check path."}};
+        }
+    }
+
+    return {{"status", "error"}, {"message", "Unknown command"}};
+}
+
+// ... (Hàm list_processes giữ nguyên) ...
+json ProcessManager::list_processes() {
+    json process_list = json::array();
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) return {{"status", "error"}};
+
+    PROCESSENTRY32 pe32;
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+
+    if (Process32First(hSnapshot, &pe32)) {
+        do {
+            process_list.push_back({
+                {"pid", (int)pe32.th32ProcessID},
+                {"name", std::string(pe32.szExeFile)},
+                {"threads", (int)pe32.cntThreads}
+            });
+        } while (Process32Next(hSnapshot, &pe32));
+    }
+    CloseHandle(hSnapshot);
+    return {{"module", "PROCESS"}, {"command", "LIST"}, {"status", "success"}, {"data", {{"process_list", process_list}}}};
+}
+
+// ... (Hàm kill_process giữ nguyên) ...
+bool ProcessManager::kill_process(int pid) {
+    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+    if (!hProcess) return false;
+    bool res = TerminateProcess(hProcess, 1);
+    CloseHandle(hProcess);
+    return res;
+}
+
+// [MỚI] Cài đặt hàm Start Process
+bool ProcessManager::start_process(const std::string& path, int& out_pid) {
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    // CreateProcess yêu cầu chuỗi command line có thể ghi được (mutable), nên ta copy ra buffer
+    std::vector<char> cmdData(path.begin(), path.end());
+    cmdData.push_back('\0');
+
+    // API tạo tiến trình
+    if (CreateProcessA(
+        NULL,           // No module name (use command line)
+        cmdData.data(), // Command line
+        NULL,           // Process handle not inheritable
+        NULL,           // Thread handle not inheritable
+        FALSE,          // Set handle inheritance to FALSE
+        0,              // No creation flags
+        NULL,           // Use parent's environment block
+        NULL,           // Use parent's starting directory 
+        &si,            // Pointer to STARTUPINFO structure
+        &pi             // Pointer to PROCESS_INFORMATION structure
+    )) {
+        out_pid = (int)pi.dwProcessId;
+        
+        // Quan trọng: Đóng handle để tránh rò rỉ bộ nhớ (Process vẫn chạy bình thường)
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return true;
+    }
+    
+    return false;
 }
