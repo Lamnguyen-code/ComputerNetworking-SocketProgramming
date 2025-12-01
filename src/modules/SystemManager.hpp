@@ -6,6 +6,8 @@
 #if _WIN32
 #include <windows.h> // Cho các kiểu dữ liệu Windows
 #else
+#include <thread>
+#include <iostream>
 #endif
 
 class SystemManager : public IRemoteModule {

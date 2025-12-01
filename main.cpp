@@ -19,6 +19,9 @@
 #include "src/core/CommandDispatcher.hpp"
 #include "src/interfaces/IRemoteModule.hpp"
 #include "src/modules/KeyManager.hpp"
+#include "src/modules/AppManager.hpp"
+#include "src/modules/ProcessManager.hpp"
+#include "src/modules/SystemManager.hpp"
 #include "src/modules/WebcamManager.hpp"
 #include "src/modules/ScreenManager.hpp"  // Phải có file này (chứa hàm static capture_screen_data)
 #include "src/modules/ProcessManager.hpp" // Module vừa tách file
@@ -172,7 +175,7 @@ void do_session(tcp::socket s) {
 }
 
 int main() {
-    SetConsoleOutputCP(CP_UTF8);
+    // SetConsoleOutputCP(CP_UTF8);
     std::cout << "=== REMOTE SERVER (Binary Optimized) ===\n";
 
     // Đăng ký module
