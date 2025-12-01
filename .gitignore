@@ -1,2 +1,4 @@
 test.cpp
 test.exe
+*.txt
+*.out
