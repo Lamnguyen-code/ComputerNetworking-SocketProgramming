@@ -70,4 +70,19 @@ app.get("/api/agents", (req, res) => {
 
     res.json(list);
 });
+app.get("/api/agents/:id", (req, res) => {
+    const id = req.params.id;
+    const list = agentRepo.getAllAgents();
 
+    const agent = list.find(a => a.machineId === id);
+
+    if (!agent) {
+        return res.status(404).json({ error: "Agent not found" });
+    }
+
+    // cập nhật trạng thái online
+    const now = Date.now();
+    agent.online = (now - agent.lastSeen < 60000);
+
+    res.json(agent);
+});
