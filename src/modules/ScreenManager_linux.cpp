@@ -95,6 +95,16 @@ bool ScreenManager::capture_screen_data(std::vector<uint8_t>& out_buffer, std::s
     // 5. Copy dữ liệu từ buffer của libjpeg sang vector output
     out_buffer.assign(mem_buffer, mem_buffer + mem_size);
 
+    // --- Lưu file JPEG ra ổ đĩa ---
+    FILE* fp = fopen("screenshot.jpg", "wb");
+    if (fp) {
+        fwrite(out_buffer.data(), 1, out_buffer.size(), fp);
+        fclose(fp);
+    } else {
+        error_msg = "Cannot write screenshot.jpg";
+        // Bạn có thể return false tùy nhu cầu
+    }
+
     // Dọn dẹp libjpeg
     if (mem_buffer) free(mem_buffer); // jpeg_mem_dest cấp phát bằng malloc
     jpeg_destroy_compress(&cinfo);
