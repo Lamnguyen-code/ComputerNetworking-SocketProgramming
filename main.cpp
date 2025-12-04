@@ -333,6 +333,45 @@ void sendHeartbeat()
     }
 }
 
+#include <boost/asio.hpp> 
+using boost::asio::ip::udp;
+std::string udp_discover_registry()
+{
+    try {
+        boost::asio::io_context io;
+
+        udp::socket socket(io);
+        socket.open(udp::v4());
+
+        socket.bind(udp::endpoint(udp::v4(), 0));
+
+        socket.set_option(boost::asio::socket_base::broadcast(true));
+        socket.non_blocking(true);
+
+        udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), 8888);
+
+        std::string msg = "DISCOVER_REGISTRY";
+        socket.send_to(boost::asio::buffer(msg), broadcast_ep);
+
+        char data[256] = {};
+        udp::endpoint sender;
+
+        for (int i = 0; i < 30; i++) {       // retry 3 giây
+            boost::system::error_code ec;
+            size_t len = socket.receive_from(boost::asio::buffer(data), sender, 0, ec);
+
+            if (!ec && len > 0) {
+                std::string reply(data, len);
+                if (reply.rfind("REGISTRY_IP:", 0) == 0)
+                    return reply.substr(12);
+            }
+            Sleep(100);
+        }
+    }
+    catch (...) {}
+
+    return "";
+}
 
 int main() {
 
@@ -353,9 +392,14 @@ int main() {
         msg["data"] = { {"key", key_char} };
         g_sessionManager.broadcast(msg.dump());
     });
-    registry_host = "192.168.88.102";
+    registry_host = udp_discover_registry();//"192.168.88.102";
     // 1️⃣ Đăng ký agent lần đầu
-    registerToRegistry();
+    // registerToRegistry();
+    if (registry_host.empty()) {
+        std::cout << "[ERROR] Không tìm thấy registry server (UDP discovery failed)\n";
+    } else {
+        registerToRegistry();
+    }
 
     // 2️⃣ Tạo thread gửi heartbeat định kỳ 10 giây/lần
     std::thread([]() {
