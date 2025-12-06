@@ -1,0 +1,24 @@
+table {
+  border-collapse: collapse;
+  margin-top: 20px;
+}
+
+th, td {
+  padding: 8px 12px;
+  text-align: left;
+}
+
+th {
+  background-color: #494444;
+}
+
+button {
+  background: #007bff;
+  border: none;
+  color: white;
+  border-radius: 4px;
+}
+
+button:disabled {
+  background: gray;
+}

