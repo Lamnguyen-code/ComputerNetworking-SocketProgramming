@@ -1,5 +1,9 @@
 #define WIN32_LEAN_AND_MEAN
+#if _WIN32
 #include <windows.h>
+#else
+#endif
+
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
