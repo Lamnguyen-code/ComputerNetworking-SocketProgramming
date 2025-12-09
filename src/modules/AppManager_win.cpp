@@ -4,6 +4,10 @@
 #include <cctype>    // cho ::tolower
 #include <vector>
 
+#if _WIN32
+#include "AppManager.hpp"
+#include <unordered_map>
+
 // Helper: Chuyển chuỗi về chữ thường
 static std::string to_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -160,3 +164,4 @@ json AppManager::handle_command(const json& request) {
 
     return {{"status", "error"}, {"message", "Unknown APP command"}};
 }
+#endif

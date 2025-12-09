@@ -5,6 +5,16 @@
 #include <vector>
 #include <thread>
 
+#if _WIN32
+#include <windows.h>
+#include <objidl.h> 
+#include <gdiplus.h>
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#else
+#endif
+
 class WebcamManager : public IRemoteModule {
 public:
     using StreamCallback = std::function<void(const std::vector<uint8_t>&)>;

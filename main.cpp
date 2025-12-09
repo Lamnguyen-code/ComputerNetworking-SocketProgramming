@@ -1,9 +1,18 @@
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#if _WIN32
 #include <windows.h>
+
 #else
+#include <unistd.h>         // gethostname
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <ifaddrs.h>        // getifaddrs (Quan trọng để lấy IP)
 #endif
 
+// Include libraries
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -14,17 +23,17 @@
 #include <vector>
 #include <algorithm>
 #include <nlohmann/json.hpp>
-
-// Include các module
-#include "core/CommandDispatcher.hpp"
-#include "interfaces/IRemoteModule.hpp"
-#include "modules/KeyManager.hpp"
-#include "modules/WebcamManager.hpp"
-#include "modules/ScreenManager.hpp"  // Phải có file này (chứa hàm static capture_screen_data)
-#include "modules/ProcessManager.hpp" // Module vừa tách file
-
 #include <boost/beast/http.hpp>
 #include <chrono>
+
+// Include các module
+#include "src/core/CommandDispatcher.hpp"
+#include "src/interfaces/IRemoteModule.hpp"
+#include "src/modules/KeyManager.hpp"
+#include "src/modules/WebcamManager.hpp"
+#include "src/modules/ScreenManager.hpp"  // Phải có file này (chứa hàm static capture_screen_data)
+#include "src/modules/ProcessManager.hpp" // Module vừa tách file
+
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
@@ -176,31 +185,54 @@ void do_session(tcp::socket s) {
     g_sessionManager.leave(ws.get());
 }
 
-
+// 1. Hàm lấy tên máy (Computer Name)
 std::string get_computer_name() {
-    char buf[256];
-    DWORD size = sizeof(buf);
-    if (GetComputerNameA(buf, &size)) {
-        return std::string(buf);
+    char hostname[256];
+    // gethostname trả về 0 nếu thành công
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        return std::string(hostname);
     }
     return "UNKNOWN-PC";
 }
+
+// 2. Hàm lấy IP LAN (Local IP)
 std::string get_local_ip() {
-    WSADATA wsaData;
-    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    struct ifaddrs *ifAddrStruct = NULL;
+    struct ifaddrs *ifa = NULL;
+    void *tmpAddrPtr = NULL;
+    std::string ip_address = "127.0.0.1"; // Mặc định là localhost
 
-    char hostname[256];
-    gethostname(hostname, sizeof(hostname));
+    // Lấy danh sách các card mạng (interfaces)
+    getifaddrs(&ifAddrStruct);
 
-    struct hostent* host = gethostbyname(hostname);
-    if (!host) return "127.0.0.1";
+    for (ifa = ifAddrStruct; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) {
+            continue;
+        }
 
-    struct in_addr addr;
-    memcpy(&addr, host->h_addr_list[0], sizeof(struct in_addr));
+        // Chỉ quan tâm đến IPv4 (AF_INET)
+        if (ifa->ifa_addr->sa_family == AF_INET) { 
+            tmpAddrPtr = &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+            
+            char addressBuffer[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
 
-    WSACleanup();
-    return std::string(inet_ntoa(addr));
+            // Bỏ qua loopback (127.0.0.1) để tìm IP thật (192.168...)
+            // strcmp trả về 0 nếu chuỗi giống nhau
+            if (strcmp(ifa->ifa_name, "lo") != 0) {
+                ip_address = addressBuffer;
+                // Thường thì ta lấy IP đầu tiên tìm thấy (ví dụ eth0 hoặc wlan0)
+                break; 
+            }
+        }
+    }
+    
+    // Giải phóng bộ nhớ
+    if (ifAddrStruct != NULL) freeifaddrs(ifAddrStruct);
+    
+    return ip_address;
 }
+
 std::string get_os_name() {
 #ifdef _WIN64
     return "Windows 64-bit";
@@ -210,37 +242,7 @@ std::string get_os_name() {
     return "Unknown OS";
 #endif
 }
-
-// std::string get_subnet() {
-//     std::string ip = get_local_ip(); // bạn đã có hàm này
-//     size_t lastDot = ip.rfind('.');
-//     return ip.substr(0, lastDot); // ví dụ "192.168.1"
-// }
-// std::string detect_registry_server() {
-//     std::string subnet = get_subnet();
-
-//     for (int i = 1; i <= 254; i++) {
-//         std::string ip = subnet + "." + std::to_string(i);
-
-//         try {
-//             net::io_context ctx;
-//             tcp::socket sock(ctx);
-//             beast::error_code ec;
-
-//             sock.connect({ net::ip::make_address(ip, ec), 3000 }, ec);
-
-//             if (!ec) {
-//                 std::cout << "[DETECT] Registry found at: " << ip << "\n";
-//                 return ip;
-//             }
-//         }
-//         catch (...) {}
-//     }
-
-//     return ""; // not found
-// }
 static std::string registry_host = "";
-
 
 // ==================== REGISTRY CLIENT ====================
 
@@ -369,7 +371,7 @@ std::string udp_discover_registry()
                 if (reply.rfind("REGISTRY_IP:", 0) == 0)
                     return reply.substr(12);
             }
-            Sleep(100);
+            sleep(100);
         }
     }
     catch (...) {}
@@ -378,8 +380,6 @@ std::string udp_discover_registry()
 }
 
 int main() {
-
-    SetConsoleOutputCP(CP_UTF8);
     std::cout << "=== REMOTE SERVER (Binary Optimized) ===\n";
 
     // Đăng ký module

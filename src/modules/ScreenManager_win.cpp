@@ -1,9 +1,15 @@
 #include "ScreenManager.hpp"
+<<<<<<< HEAD
 #include <windows.h>
 
 // [FIX] Thêm thư viện này để định nghĩa IStream cho GDI+
 // Bắt buộc phải có nếu dự án dùng WIN32_LEAN_AND_MEAN
 #include <objidl.h> 
+=======
+
+// [FIX] Thêm thư viện này để định nghĩa IStream cho GDI+
+// Bắt buộc phải có nếu dự án dùng WIN32_LEAN_AND_MEAN
+>>>>>>> master
 
 #include <gdiplus.h>
 #include <vector>
@@ -129,4 +135,8 @@ json ScreenManager::handle_command(const json& request) {
     // Chúng ta sẽ xử lý capture binary ở main.cpp để truy cập socket trực tiếp
     // Hàm này chỉ trả về OK để báo hiệu nếu cần.
     return { {"status", "ok"} };
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> master

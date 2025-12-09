@@ -16,3 +16,8 @@ Checking/
 Get-Item
 $null
 #
+test.cpp
+test.exe
+*.txt
+*.out
+*.jpg

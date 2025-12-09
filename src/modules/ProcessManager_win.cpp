@@ -1,7 +1,4 @@
 #include "ProcessManager.hpp"
-#include <windows.h>
-#include <tlhelp32.h>
-#include <iostream>
 
 const std::string& ProcessManager::get_module_name() const {
     static const std::string name = "PROCESS";
