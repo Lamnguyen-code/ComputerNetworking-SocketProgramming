@@ -13,6 +13,7 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #else
+#include <jpeglib.h>
 #endif
 
 class WebcamManager : public IRemoteModule {
