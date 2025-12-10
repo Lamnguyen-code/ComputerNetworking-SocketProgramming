@@ -856,10 +856,27 @@ function onRemoteKeyUp(e) {
         else if (res.command === 'SAVE_VIDEO') { log("Video Saved to Server!"); send('FILE','LIST'); }
         
         // --- APP & PROCESS LIST ---
-        else if (res.module === 'APP' && res.command === 'LIST') {
-            console.log("APP LIST:", res.data);
-            alert("App List loaded in Console (F12)");
-        }
+        else if (msg.module === "APP" && msg.command === "LIST") {
+
+  let apps = [];
+
+  // CASE 1: backend gửi đúng dạng array group
+  if (Array.isArray(msg.data)) {
+    apps = msg.data;
+  }
+  // CASE 2: fallback
+  else if (Array.isArray(msg.apps)) {
+    apps = msg.apps;
+  }
+  else {
+    console.warn("APP LIST: format không đúng", msg);
+  }
+
+  // apps = [ { exe, count, processes:[{pid,threads},...] }, ... ]
+  this.appList.set(apps);
+  return;
+}
+        
         else if (res.module === 'PROCESS' && res.command === 'LIST') {
             console.log("PROCESS LIST:", res.data.process_list);
             alert("Process List loaded in Console (F12)");

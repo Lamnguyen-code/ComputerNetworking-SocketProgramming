@@ -612,3 +612,72 @@ app-agent-detail span {
   outline: none;
   resize: vertical;
 }
+/* BACKDROP */
+.editor-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  z-index: 9000;
+}
+
+/* MODAL KHUNG CHÍNH */
+.editor-modal {
+  position: fixed;
+  top: 5%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 85%;
+  height: 85%;
+  background: #0d0d0d;
+  border: 1px solid #222;
+  box-shadow: 0 0 20px rgba(0,255,0,0.2);
+  display: flex;
+  flex-direction: column;
+  z-index: 9100;
+}
+
+/* HEADER */
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: #011c01;
+  border-bottom: 1px solid #333;
+  color: #00ff41;
+  font-size: 15px;
+  font-weight: bold;
+}
+
+.editor-buttons button {
+  margin-left: 8px;
+}
+
+/* TEXTAREA */
+.editor-textarea {
+  flex: 1;
+  width: 100%;
+  padding: 10px;
+  background: #080808;
+  color: #e6e6e6;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: "Fira Code", monospace;
+  font-size: 14px;
+}
+
+/* BUTTONS */
+.btn-save {
+  background: #002d00;
+  border: 1px solid #00ff41;
+  color: #00ff41;
+  padding: 6px 12px;
+}
+
+.btn-close {
+  background: #300000;
+  border: 1px solid #ff4444;
+  color: #ff9999;
+  padding: 6px 12px;
+}
