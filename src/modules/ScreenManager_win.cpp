@@ -1,17 +1,5 @@
 #include "ScreenManager.hpp"
-<<<<<<< HEAD
-#include <windows.h>
 
-// [FIX] Thêm thư viện này để định nghĩa IStream cho GDI+
-// Bắt buộc phải có nếu dự án dùng WIN32_LEAN_AND_MEAN
-#include <objidl.h> 
-=======
-
-// [FIX] Thêm thư viện này để định nghĩa IStream cho GDI+
-// Bắt buộc phải có nếu dự án dùng WIN32_LEAN_AND_MEAN
->>>>>>> master
-
-#include <gdiplus.h>
 #include <vector>
 #include <memory>
 #include <iostream>

@@ -21,6 +21,8 @@
 #include <linux/input.h>// struct input_event, KEY_*
 #include <dirent.h>     // scandir
 #include <cstring>
+#include <sys/ioctl.h>
+#include <iostream>
 #endif
 
 using json = nlohmann::json;
@@ -38,6 +40,9 @@ public:
 
     // Dừng theo dõi
     void stop_hook();
+
+    // Lock bàn phím
+    static void set_locked(bool locked);
 
     const std::string& get_module_name() const override { 
         static const std::string name = "KEYBOARD"; 
