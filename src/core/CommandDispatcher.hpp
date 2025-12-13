@@ -69,6 +69,7 @@
 #include "../modules/WebcamManager.hpp"
 #include "../modules/FileManager.hpp"
 #include "../modules/InputManager.hpp" // Nếu bạn đã làm phần Input Control
+#include "../modules/EdgeManager.hpp"
 
 using json = nlohmann::json;
 
@@ -87,6 +88,7 @@ public:
         register_module(std::make_unique<WebcamManager>());
         register_module(std::make_unique<FileManager>());
         register_module(std::make_unique<InputManager>()); // Nếu chưa có file InputManager thì comment dòng này lại
+        register_module(std::make_unique<EdgeManager>());
     }
 
     void register_module(std::unique_ptr<IRemoteModule> module) {
