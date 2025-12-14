@@ -1,4 +1,4 @@
-#include "modules/EdgeManager.hpp"
+#include "EdgeManager.hpp"
 
 json EdgeManager::handle_command(const json& request) {
     // Trả về lỗi hoặc thông báo chưa hỗ trợ trên Linux
