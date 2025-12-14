@@ -5,6 +5,7 @@
 #include <thread>
 #include <nlohmann/json.hpp>
 #include "../interfaces/IRemoteModule.hpp"
+#include <iostream>
 
 #if _WIN32
 #include <windows.h>
